@@ -23,45 +23,93 @@ jobs:
           python-version: "3.13"
 
       - name: 安装 PyInstaller
-        run: python -m pip install --upgrade pip pyinstaller
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m pip install --upgrade pip pyinstaller
+          python -m PyInstaller --version
 
       - name: 读取版本号
         id: ver
         shell: pwsh
         run: |
-          $raw = Get-Content -LiteralPath "src/逐字自动输入.py" -Raw -Encoding UTF8
+          $ErrorActionPreference = "Stop"
+          $src = Join-Path $env:GITHUB_WORKSPACE "src/逐字自动输入.py"
+          $raw = Get-Content -LiteralPath $src -Raw -Encoding UTF8
           $v = ([regex]::Match($raw, 'APP_VERSION\s*=\s*"([^"]+)"')).Groups[1].Value
           if (-not $v) { throw "未能从源码读取 APP_VERSION" }
           "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          Write-Host "版本: $v"
+          Write-Host "版本号: $v"
 
-      - name: 打包（单文件版 + 便携版）
+      - name: 打包
         shell: pwsh
+        env:
+          APP_VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          $v = "${{ steps.ver.outputs.version }}"
+          # 关键点：PyInstaller 的 --specpath 会把相对路径解析到 spec 目录下，
+          # 因此 --icon / --add-data / --version-file 必须用绝对路径；
+          # 构建阶段统一用 ASCII 名字，中文只出现在最后的重命名步骤里。
+          $ErrorActionPreference = "Stop"
+
+          $root  = $env:GITHUB_WORKSPACE
+          $v     = $env:APP_VERSION
+          $src   = Join-Path $root "src/逐字自动输入.py"
+          $icon  = Join-Path $root "assets/app.ico"
+          $vfile = Join-Path $root "assets/version_info.txt"
+          $dist  = Join-Path $root "dist"
+          $build = Join-Path $root "build"
+
+          foreach ($p in @($src, $icon, $vfile)) {
+            if (-not (Test-Path -LiteralPath $p)) { throw "缺少文件: $p" }
+          }
+
           $common = @(
-            "--noconfirm","--clean","--windowed",
-            "--icon","assets/app.ico",
-            "--add-data","assets/app.ico;.",
-            "--version-file","assets/version_info.txt",
-            "src/逐字自动输入.py"
+            "--noconfirm", "--clean", "--windowed",
+            "--icon", $icon,
+            "--add-data", "$icon;.",
+            "--version-file", $vfile,
+            $src
           )
-          python -m PyInstaller @common --onefile --name "逐字自动输入_v$v" --distpath dist --workpath build --specpath build
-          python -m PyInstaller @common --onedir  --name "逐字自动输入_v${v}_便携版" --distpath dist --workpath build --specpath build
-          Copy-Item -LiteralPath "src/逐字自动输入.py" -Destination "dist/逐字自动输入_源码_v$v.py" -Force
-          Compress-Archive -Path "dist/逐字自动输入_v${v}_便携版" -DestinationPath "dist/逐字自动输入_v${v}_便携版.zip" -Force
+
+          Write-Host "== [1/2] 打包单文件版 =="
+          python -m PyInstaller @common --onefile --name "AutoInput" `
+            --distpath $dist --workpath $build --specpath $build
+          if ($LASTEXITCODE -ne 0) { throw "单文件版打包失败（exit $LASTEXITCODE）" }
+
+          Write-Host "== [2/2] 打包便携版 =="
+          python -m PyInstaller @common --onedir --name "AutoInputPortable" `
+            --distpath $dist --workpath $build --specpath $build
+          if ($LASTEXITCODE -ne 0) { throw "便携版打包失败（exit $LASTEXITCODE）" }
+
+          Write-Host "== 构建输出 =="
+          Get-ChildItem -LiteralPath $dist | Select-Object Name, Length | Format-Table
+
+          $exeOut = Join-Path $dist "逐字自动输入_v$v.exe"
+          $dirOut = Join-Path $dist "逐字自动输入_v${v}_便携版"
+          $zipOut = Join-Path $dist "逐字自动输入_v${v}_便携版.zip"
+          $srcOut = Join-Path $dist "逐字自动输入_源码_v$v.py"
+
+          Move-Item -LiteralPath (Join-Path $dist "AutoInput.exe") -Destination $exeOut -Force
+          Move-Item -LiteralPath (Join-Path $dist "AutoInputPortable") -Destination $dirOut -Force
+          Copy-Item -LiteralPath $src -Destination $srcOut -Force
+          Compress-Archive -LiteralPath $dirOut -DestinationPath $zipOut -Force
+
+          Write-Host "== 最终产物 =="
+          Get-ChildItem -LiteralPath $dist | Select-Object Name, Length | Format-Table
 
       - name: 生成 SHA256
         shell: pwsh
         run: |
-          Get-ChildItem -LiteralPath dist -File |
+          $ErrorActionPreference = "Stop"
+          $dist = Join-Path $env:GITHUB_WORKSPACE "dist"
+          Get-ChildItem -LiteralPath $dist -File |
             Where-Object { $_.Name -ne "SHA256.txt" } |
             Sort-Object Name |
             ForEach-Object {
               $h = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLower()
               "$h  $($_.Name)"
-            } | Set-Content -LiteralPath dist/SHA256.txt -Encoding UTF8
-          Get-Content -LiteralPath dist/SHA256.txt
+            } | Set-Content -LiteralPath (Join-Path $dist "SHA256.txt") -Encoding UTF8
+          Get-Content -LiteralPath (Join-Path $dist "SHA256.txt")
 
       - name: 上传构建产物（手动运行时可下载）
         uses: actions/upload-artifact@v4
