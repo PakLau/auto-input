@@ -71,7 +71,7 @@
 ## 安全性 / 扫描报告
 
 - VirusTotal 多引擎扫描报告：
-  https://www.virustotal.com/gui/file/bfd9c54a03905454a1b2373e87067444691c27bee54a93ccdd9ad76d672542db
+  https://www.virustotal.com/gui/file/ec2aa0fa8282558ec3a01e80fd58d18d8fed06d36edec3fc601d081ff4bdd0af
 - 发布包校验值见 Release 附件中的 `SHA256.txt`（**每次构建的哈希不同，以当次发布为准**）
 - 如果杀软报毒，多半是误报，原因与处理见下文「常见问题」
 
