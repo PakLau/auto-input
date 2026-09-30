@@ -65,6 +65,13 @@
   保存的是速度、开关状态和窗口位置，**不保存你输入的任何文本**
 - 文本导入/导出只在你手动操作时读写你指定的文件
 
+## 安全性 / 扫描报告
+
+- VirusTotal 多引擎扫描报告：
+  https://www.virustotal.com/gui/file/bfd9c54a03905454a1b2373e87067444691c27bee54a93ccdd9ad76d672542db
+- 发布包校验值见 Release 附件中的 `SHA256.txt`（**每次构建的哈希不同，以当次发布为准**）
+- 如果杀软报毒，多半是误报，原因与处理见下文「常见问题」
+
 ## 免责声明
 
 - 本软件是**输入辅助工具**，不提供任何答案或内容，也不针对任何特定平台
@@ -114,11 +121,14 @@ A：`%APPDATA%\PakLua\AutoInput\settings.json`，删除该文件即恢复默认�
 Get-FileHash .\逐字自动输入_v1.0.0.exe -Algorithm SHA256
 ```
 
-| 文件 | SHA256 |
-| --- | --- |
-| `逐字自动输入_v1.0.0.exe` | `bfd9c54a03905454a1b2373e87067444691c27bee54a93ccdd9ad76d672542db` |
-| `逐字自动输入_v1.0.0_便携版.zip` | `fd448ec18e473d06094a5e4abc3a23007df7b5002f6d94066a2bff034d2cb914` |
-| `逐字自动输入_源码_v1.0.0.py` | `9f03ffb5c06d43f3ac656396bf858941c77ccbb5dfe50cade6b1c4ad7186865f` |
+每个 Release 都附带 `SHA256.txt`，里面是**当次构建产物**的校验值（PyInstaller 的产物不是逐字节可复现的，
+换一台机器/换一次构建哈希就会变，所以不要照抄本文档里的数字，**以 Release 附件为准**）：
+
+```powershell
+# 下载 Release 里的 SHA256.txt 后，在本目录执行：
+Get-FileHash .\逐字自动输入_v1.0.0.exe -Algorithm SHA256
+# 比对 SHA256.txt 中对应行的值
+```
 
 ---
 
@@ -191,3 +201,76 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 - 只能往"当前有焦点的窗口"输入，程序不读屏、不操作其他进程
 - 目标程序若以管理员权限运行，本程序也需要以管理员身份运行
 - 中文输入法处于候选状态时可能干扰输入，建议切换到英文输入法
+
+## CI 常见坑（都踩过，记录下来省事）
+
+### 1. PyInstaller 的 `--specpath` 会改变相对路径的基准 ⭐
+
+**症状**：Actions 里打包失败，日志末尾是 `Compress-Archive: The path 'dist/xxx_便携版' does not exist`。
+
+**原因**：一旦指定 `--specpath build`，`--add-data` / `--icon` / `--version-file` 里的**相对路径**
+会被解析成"相对于 spec 目录"，于是 PyInstaller 去找 `build/assets/app.ico` 而不是 `assets/app.ico`，
+找不到资源就退出（非 0），`dist` 里自然没有产物；报错却出现在后面的压缩步骤，很容易看错方向。
+
+**正确写法**：这些参数一律用**绝对路径**（workflow 里用 `$env:GITHUB_WORKSPACE` 拼）：
+
+```powershell
+$root  = $env:GITHUB_WORKSPACE
+$icon  = Join-Path $root "assets/app.ico"
+$vfile = Join-Path $root "assets/version_info.txt"
+$src   = Join-Path $root "src/逐字自动输入.py"
+
+python -m PyInstaller --noconfirm --clean --windowed `
+  --icon $icon --add-data "$icon;." --version-file $vfile `
+  --onefile --name "AutoInput" `
+  --distpath "$root/dist" --workpath "$root/build" --specpath "$root/build" $src
+```
+
+### 2. 构建阶段尽量别让中文参与"生成文件名"
+
+构建时用 ASCII 名字（`AutoInput` / `AutoInputPortable`），**打包完成后再用 `Move-Item` 改成中文名**。
+这样即使 runner 的语言环境、控制台编码不同，也不会出现"目录名对不上"的问题。
+
+### 3. PowerShell 脚本要存成 UTF-8 with BOM
+
+`build.ps1` 含中文，如果保存成 **UTF-8 无 BOM**，Windows PowerShell 5.1 会按 GBK 读取 → 中文变乱码 →
+语法错误（`The string is missing the terminator`）。用 PowerShell 7（pwsh）则没有这个问题。
+
+### 4. Actions 里要"失败即停"
+
+PowerShell 默认**不会**因为原生命令返回非 0 就中断，所以要显式检查：
+
+```powershell
+python -m PyInstaller ... ; if ($LASTEXITCODE -ne 0) { throw "打包失败 (exit $LASTEXITCODE)" }
+```
+
+并在压缩前打印目录内容，出问题时日志里能直接看到实际产物：
+
+```powershell
+Get-ChildItem -LiteralPath $dist | Select-Object Name, Length | Format-Table
+```
+
+### 5. GitHub 直连不稳时给 git 挂代理
+
+如果 `git push` 报 `Recv failure: Connection was reset`，给 GitHub 单独配代理（不影响其它站点）：
+
+```powershell
+git config --global http.https://github.com/.proxy http://127.0.0.1:7890
+```
+
+取消：
+
+```powershell
+git config --global --unset http.https://github.com/.proxy
+```
+
+### 6. 重新打 tag 让 CI 用新代码重跑
+
+改了 workflow 之后，旧 tag 指向的还是旧提交，需要把 tag 挪到新提交再推：
+
+```powershell
+git push --delete origin v1.0.0   # 删远程 tag
+git tag -d v1.0.0                 # 删本地 tag
+git tag v1.0.0                    # 指向当前 HEAD
+git push origin v1.0.0            # 重新触发构建
+```
