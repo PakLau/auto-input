@@ -84,10 +84,13 @@ jobs:
           Write-Host "== 构建输出 =="
           Get-ChildItem -LiteralPath $dist | Select-Object Name, Length | Format-Table
 
-          $exeOut = Join-Path $dist "逐字自动输入_v$v.exe"
-          $dirOut = Join-Path $dist "逐字自动输入_v${v}_便携版"
-          $zipOut = Join-Path $dist "逐字自动输入_v${v}_便携版.zip"
-          $srcOut = Join-Path $dist "逐字自动输入_源码_v$v.py"
+          # 注意：GitHub 会静默丢弃 Release 附件名中的非 ASCII 字符
+          # （例如“逐字自动输入_v1.0.0.exe”会变成“_v1.0.0.exe”），
+          # 所以发布附件统一使用英文名，中文名只出现在程序界面和 Release 描述里。
+          $exeOut = Join-Path $dist "AutoInput_v$v.exe"
+          $dirOut = Join-Path $dist "AutoInput_v${v}_portable"
+          $zipOut = Join-Path $dist "AutoInput_v${v}_portable.zip"
+          $srcOut = Join-Path $dist "AutoInput_v${v}_source.py"
 
           Move-Item -LiteralPath (Join-Path $dist "AutoInput.exe") -Destination $exeOut -Force
           Move-Item -LiteralPath (Join-Path $dist "AutoInputPortable") -Destination $dirOut -Force
@@ -123,7 +126,7 @@ jobs:
         with:
           generate_release_notes: true
           files: |
-            dist/逐字自动输入_v*.exe
-            dist/逐字自动输入_v*_便携版.zip
-            dist/逐字自动输入_源码_v*.py
+            dist/AutoInput_v*.exe
+            dist/AutoInput_v*_portable.zip
+            dist/AutoInput_v*_source.py
             dist/SHA256.txt
