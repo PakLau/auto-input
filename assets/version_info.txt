@@ -1,7 +1,7 @@
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 0, 0, 0),
-    prodvers=(1, 0, 0, 0),
+    filevers=(1, 0, 1, 0),
+    prodvers=(1, 0, 1, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -16,12 +16,12 @@ VSVersionInfo(
         [
           StringStruct('CompanyName', 'PakLua'),
           StringStruct('FileDescription', '逐字自动输入 - 逐字符模拟键盘录入工具'),
-          StringStruct('FileVersion', '1.0.0.0'),
+          StringStruct('FileVersion', '1.0.1.0'),
           StringStruct('InternalName', 'AutoInput'),
           StringStruct('LegalCopyright', 'Copyright (C) 2026 PakLua'),
-          StringStruct('OriginalFilename', '逐字自动输入_v1.0.0.exe'),
+          StringStruct('OriginalFilename', 'AutoInput_v1.0.1.exe'),
           StringStruct('ProductName', '逐字自动输入'),
-          StringStruct('ProductVersion', '1.0.0.0')
+          StringStruct('ProductVersion', '1.0.1.0')
         ]
       )
     ]),
