@@ -1074,6 +1074,7 @@ class AutoTypeApp:
             "fix_list": bool(self.fix_list_var.get()),
             "rm_blank": bool(self.rm_blank_var.get()),
             "log_expanded": bool(self.log_expanded),
+            "mini": bool(getattr(self, "_mini", False)),
             "geometry": [self.root.winfo_x(), self.root.winfo_y(),
                          self.root.winfo_width(), self.root.winfo_height()],
         }
@@ -1092,8 +1093,8 @@ class AutoTypeApp:
         root.configure(bg=C.BG)
         root.title(APP_TITLE)
 
-        # 允许自由缩放：下限放到 620×460（逻辑像素），窄窗口会自动切换紧凑布局
-        min_w, min_h = int(620 * self.scale), int(460 * self.scale)
+        # 允许自由缩放：下限放到 380×260（逻辑像素），窄窗口会自动切换紧凑布局
+        min_w, min_h = int(380 * self.scale), int(260 * self.scale)
         root.minsize(min_w, min_h)
 
         vx, vy, vw, vh = virtual_screen_bounds()
@@ -1110,7 +1111,8 @@ class AutoTypeApp:
             y = min(max(int(geo[1]), vy), max(vy, vy + vh - h))
             root.geometry(f"{w}x{h}+{x}+{y}")
         else:
-            w, h = int(960 * self.scale), int(800 * self.scale)
+            # 默认就是个"小面板"：1080p 屏幕上约占 32% × 48%
+            w, h = int(620 * self.scale), int(520 * self.scale)
             w, h = min(w, vw - int(60 * self.scale)), min(h, vh - int(90 * self.scale))
             root.geometry(f"{w}x{h}+{max(vx, vx + (vw - w) // 2)}+{max(vy, vy + (vh - h) // 2 - 20)}")
 
@@ -1130,7 +1132,7 @@ class AutoTypeApp:
                                        style="Slim.Vertical.TScrollbar")
         self._scroll_canvas.configure(yscrollcommand=self._on_scroll_set)
 
-        outer = tk.Frame(self._scroll_canvas, bg=C.BG, padx=px(18), pady=px(16))
+        outer = tk.Frame(self._scroll_canvas, bg=C.BG, padx=px(14), pady=px(12))
         self._outer_window = self._scroll_canvas.create_window(0, 0, anchor="nw", window=outer)
         outer.bind("<Configure>", lambda _e: self._scroll_canvas.configure(
             scrollregion=self._scroll_canvas.bbox("all")))
@@ -1140,18 +1142,26 @@ class AutoTypeApp:
 
         outer.columnconfigure(0, weight=1)
         outer.rowconfigure(1, weight=1, minsize=px(150))
+        self._outer = outer
 
-        self._build_header(outer)
-        self._build_editor(outer)
-        self._build_settings(outer)
-        self._build_actions(outer)
-        self._build_progress(outer)
-        self._build_log(outer)
+        self._build_header(outer)     # row 0
+        self._build_editor(outer)     # row 1（会随窗口伸展）
+        self._build_actions(outer)    # row 2
+        self._build_progress(outer)   # row 3
+        self._build_settings(outer)   # row 4（小窗口时可滚动查看）
+        self._build_log(outer)        # row 5
 
         self.log_expanded = bool(cfg.get("log_expanded", False))
         if self.log_expanded:
             self.log_body.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
             self.log_header_btn.set_text("▾  运行日志")
+
+        self._mini = bool(cfg.get("mini", False))
+        self._pre_mini_geometry = None
+        if self._mini:
+            self.root.after(80, self._apply_mini)
+
+        self._build_context_menus()
 
     # -- 顶部标题 ------------------------------------------------------- #
     def _build_header(self, parent):
@@ -1165,10 +1175,12 @@ class AutoTypeApp:
         title_row.pack(anchor="w")
         tk.Label(title_row, text=APP_NAME, bg=C.BG, fg=C.TEXT,
                  font=font(17, "bold")).pack(side="left")
-        tk.Label(title_row, text=f"v{APP_VERSION}", bg=C.BG, fg=C.PRIMARY,
-                 font=font(9, "bold")).pack(side="left", padx=(8, 0), pady=(6, 0))
-        tk.Label(title_row, text=f"by {APP_AUTHOR}", bg=C.BG, fg=C.MUTED,
-                 font=font(9)).pack(side="left", padx=(6, 0), pady=(6, 0))
+        self._version_label = tk.Label(title_row, text=f"v{APP_VERSION}", bg=C.BG, fg=C.PRIMARY,
+                                       font=font(9, "bold"))
+        self._version_label.pack(side="left", padx=(8, 0), pady=(6, 0))
+        self._author_label = tk.Label(title_row, text=f"by {APP_AUTHOR}", bg=C.BG, fg=C.MUTED,
+                                      font=font(9))
+        self._author_label.pack(side="left", padx=(6, 0), pady=(6, 0))
         self.subtitle_label = tk.Label(
             left,
             text="把光标点进目标输入框 → 按 F9 开始逐字输入   ·   F8 重新开始   ·   Esc 紧急停止",
@@ -1177,18 +1189,23 @@ class AutoTypeApp:
 
         right = tk.Frame(head, bg=C.BG)
         right.grid(row=0, column=1, sticky="e")
+        self.mini_btn = RoundButton(right, "迷你模式", self.toggle_mini, variant="quiet",
+                                    height=34, radius=10, font_spec=font(9), pad_x=12,
+                                    width=104, bg=C.BG)
+        self.mini_btn.pack(side="left", padx=(0, 8))
         ToggleSwitch(right, "窗口置顶", self.topmost_var, bg=C.BG,
                      command=self._on_topmost_toggle,
                      switch_w=38, switch_h=22).pack(side="left")
-        RoundButton(right, "使用说明", self.show_help, variant="quiet", height=34,
-                    radius=10, font_spec=font(9), glyph="?", width=104,
-                    bg=C.BG).pack(side="left", padx=(10, 0))
+        self._help_btn = RoundButton(right, "使用说明", self.show_help, variant="quiet", height=34,
+                                     radius=10, font_spec=font(9), glyph="?", width=104, bg=C.BG)
+        self._help_btn.pack(side="left", padx=(10, 0))
 
     # -- 文本编辑区 ----------------------------------------------------- #
     def _build_editor(self, parent):
         card = RoundedBox(parent, radius=18, pad=16, shadow=True,
-                          auto_height=False, height=250)
+                          auto_height=False, height=190)
         card.grid(row=1, column=0, sticky="nsew")
+        self._card_editor = card
         body = card.body
         body.columnconfigure(0, weight=1)
         body.rowconfigure(1, weight=1)
@@ -1238,6 +1255,9 @@ class AutoTypeApp:
         self.text_input.configure(yscrollcommand=sb.set)
         self.text_input.bind("<<Modified>>", self._on_text_modified)
         self.text_input.bind("<Control-Return>", self._on_ctrl_enter)
+        self.text_input.bind("<Control-v>", lambda _e: (self.paste_text(), "break")[1])
+        self.text_input.bind("<Control-c>", lambda _e: (self.copy_text(), "break")[1])
+        self.text_input.bind("<Control-x>", lambda _e: (self.cut_text(), "break")[1])
 
         stats = tk.Frame(body, bg=C.CARD)
         stats.grid(row=2, column=0, sticky="ew", pady=(10, 0))
@@ -1251,8 +1271,9 @@ class AutoTypeApp:
 
     # -- 输入设置 ------------------------------------------------------- #
     def _build_settings(self, parent):
-        card = RoundedBox(parent, radius=18, pad=16)
-        card.grid(row=2, column=0, sticky="ew", pady=(9, 0))
+        card = RoundedBox(parent, radius=18, pad=14)
+        card.grid(row=4, column=0, sticky="ew", pady=(10, 0))
+        self._card_settings = card
         body = card.body
         body.columnconfigure(0, weight=1)
 
@@ -1329,7 +1350,7 @@ class AutoTypeApp:
     # -- 操作按钮 ------------------------------------------------------- #
     def _build_actions(self, parent):
         bar = tk.Frame(parent, bg=C.BG)
-        bar.grid(row=3, column=0, sticky="ew", pady=(12, 0))
+        bar.grid(row=2, column=0, sticky="ew", pady=(10, 0))
 
         self.btn_start = RoundButton(bar, "开始输入", self.start, variant="primary",
                                      glyph="▶", height=46, radius=14,
@@ -1347,13 +1368,16 @@ class AutoTypeApp:
         self.btn_stop.pack(side="left", padx=(10, 0))
         self.btn_stop.set_state("disabled")
 
-        tk.Label(bar, text="快捷键：F9 开始 / F8 重来 / Esc 停止 / Ctrl+Enter 开始",
-                 bg=C.BG, fg=C.MUTED, font=font(9)).pack(side="right")
+        self.shortcut_hint = tk.Label(bar, text="快捷键：F9 开始 / F8 重来 / Esc 停止 / Ctrl+Enter 开始",
+                                      bg=C.BG, fg=C.MUTED, font=font(9))
+        self.shortcut_hint.pack(side="right")
+        self._actions_bar = bar
 
     # -- 进度区 --------------------------------------------------------- #
     def _build_progress(self, parent):
-        card = RoundedBox(parent, radius=18, pad=16)
-        card.grid(row=4, column=0, sticky="ew", pady=(12, 0))
+        card = RoundedBox(parent, radius=18, pad=13)
+        card.grid(row=3, column=0, sticky="ew", pady=(10, 0))
+        self._card_progress = card
         body = card.body
         body.columnconfigure(1, weight=1)
 
@@ -1376,8 +1400,9 @@ class AutoTypeApp:
 
     # -- 日志 ----------------------------------------------------------- #
     def _build_log(self, parent):
-        card = RoundedBox(parent, radius=18, pad=14, shadow=False)
-        card.grid(row=5, column=0, sticky="ew", pady=(12, 0))
+        card = RoundedBox(parent, radius=18, pad=12, shadow=False)
+        card.grid(row=5, column=0, sticky="ew", pady=(10, 0))
+        self._card_log = card
         body = card.body
         body.columnconfigure(0, weight=1)
 
@@ -1419,6 +1444,104 @@ class AutoTypeApp:
         self.text_input.edit_modified(False)
         self._update_stats()
 
+    # -- 右键菜单（复制 / 粘贴 / 剪切 / 全选）------------------------------ #
+    def _build_context_menus(self):
+        """给文本框和日志加右键菜单，方便复制粘贴。"""
+        self._text_menu = tk.Menu(self.root, tearoff=0, font=font(9))
+        self._text_menu.add_command(label="剪切", accelerator="Ctrl+X", command=self.cut_text)
+        self._text_menu.add_command(label="复制", accelerator="Ctrl+C", command=self.copy_text)
+        self._text_menu.add_command(label="粘贴", accelerator="Ctrl+V", command=self.paste_text)
+        self._text_menu.add_separator()
+        self._text_menu.add_command(label="全选", accelerator="Ctrl+A",
+                                    command=lambda: self.text_input.tag_add("sel", "1.0", "end-1c"))
+        self._text_menu.add_command(label="清空", command=self.clear_text)
+        self.text_input.bind("<Button-3>", self._popup_text_menu)
+
+    # 直接用剪贴板读写，避免依赖 Tk 的 <<Copy>>/<<Paste>> 虚拟事件
+    def copy_text(self):
+        try:
+            data = self.text_input.get("sel.first", "sel.last")
+        except tk.TclError:
+            return
+        if not data:
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(data)
+        self.log(f"已复制 {len(data)} 个字符到剪贴板。")
+
+    def cut_text(self):
+        try:
+            data = self.text_input.get("sel.first", "sel.last")
+        except tk.TclError:
+            return
+        if not data:
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(data)
+        self.text_input.delete("sel.first", "sel.last")
+        self._update_stats()
+
+    def paste_text(self):
+        try:
+            data = self.root.clipboard_get()
+        except tk.TclError:
+            return
+        if not data:
+            return
+        try:
+            self.text_input.delete("sel.first", "sel.last")
+        except tk.TclError:
+            pass
+        self.text_input.insert("insert", data)
+        self.text_input.focus_set()
+        self._update_stats()
+        self.log(f"已粘贴 {len(data)} 个字符。")
+
+        self._log_menu = tk.Menu(self.root, tearoff=0, font=font(9))
+        self._log_menu.add_command(label="复制", command=self._copy_log_selection)
+        self._log_menu.add_command(label="全选并复制", command=self._copy_all_log)
+        self._log_menu.add_separator()
+        self._log_menu.add_command(label="清空日志", command=self._clear_console)
+        self.console.bind("<Button-3>", self._popup_log_menu)
+
+    def _popup_text_menu(self, event):
+        self.text_input.focus_set()
+        try:
+            has_selection = bool(self.text_input.tag_ranges("sel"))
+        except Exception:
+            has_selection = False
+        state = "normal" if has_selection else "disabled"
+        try:
+            self._text_menu.entryconfigure("剪切", state=state)
+            self._text_menu.entryconfigure("复制", state=state)
+            self._text_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self._text_menu.grab_release()
+        return "break"
+
+    def _copy_log_selection(self):
+        try:
+            text = self.console.get("sel.first", "sel.last")
+        except tk.TclError:
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+
+    def _copy_all_log(self):
+        text = self.console.get("1.0", "end-1c")
+        if not text.strip():
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+
+    def _popup_log_menu(self, event):
+        self.console.focus_set()
+        try:
+            self._log_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self._log_menu.grab_release()
+        return "break"
+
     # -- 自适应布局：窄窗口切换紧凑模式 ---------------------------------- #
     def _on_root_configure(self, event=None):
         if event is not None and event.widget is not self.root:
@@ -1442,6 +1565,58 @@ class AutoTypeApp:
             self._scrollbar.pack(side="right", fill="y")
         self._scrollbar.set(first, last)
 
+    # -- 迷你模式：只留进度和按钮，窗口缩到最小 -------------------------- #
+    def toggle_mini(self, preset=None):
+        self._mini = (not getattr(self, "_mini", False)) if preset is None else bool(preset)
+        self._apply_mini()
+        self._save_settings()
+
+    def _apply_mini(self):
+        """迷你模式：隐藏文字框、设置和日志，只保留标题、按钮和进度。"""
+        if self._mini:
+            if not self._pre_mini_geometry:
+                self._pre_mini_geometry = self.root.geometry()
+            for widget in (self._card_editor, self._card_settings, self._card_log):
+                widget.grid_remove()
+            self._outer.rowconfigure(1, weight=0, minsize=0)
+            self.shortcut_hint.pack_forget()
+            # 迷你窗口很窄，标题行也要瘦身：只留程序名 + 展开/置顶
+            self._version_label.pack_forget()
+            self._author_label.pack_forget()
+            self.subtitle_label.pack_forget()
+            self._help_btn.pack_forget()
+            self.mini_btn.set_text("展开")
+            # 按钮收窄，保证在 470 逻辑像素宽里排得下
+            self.btn_start.configure(width=px(132))
+            self.btn_restart.configure(width=px(104))
+            self.btn_stop.configure(width=px(104))
+            self.btn_restart.set_text("重来")
+            self.btn_stop.set_text("停止")
+            w, h = int(400 * self.scale), int(260 * self.scale)
+            vx, vy, vw, vh = virtual_screen_bounds()
+            x = min(max(self.root.winfo_x(), vx if vw else 0), max(0, (vw or self.root.winfo_screenwidth()) - w))
+            y = min(max(self.root.winfo_y(), vy if vh else 0), max(0, (vh or self.root.winfo_screenheight()) - h))
+            self.root.geometry(f"{w}x{h}+{x}+{y}")
+        else:
+            self._card_editor.grid()
+            self._card_settings.grid()
+            self._card_log.grid()
+            self._outer.rowconfigure(1, weight=1, minsize=px(150))
+            self.shortcut_hint.pack(side="right")
+            self._version_label.pack(side="left", padx=(8, 0), pady=(6, 0))
+            self._author_label.pack(side="left", padx=(6, 0), pady=(6, 0))
+            self.subtitle_label.pack(anchor="w", pady=(3, 0))
+            self._help_btn.pack(side="left", padx=(10, 0))
+            self.mini_btn.set_text("迷你模式")
+            self.btn_start.configure(width=px(196))
+            self.btn_restart.configure(width=px(156))
+            self.btn_stop.configure(width=px(156))
+            self.btn_restart.set_text("重新开始")
+            self.btn_stop.set_text("紧急停止")
+            if self._pre_mini_geometry:
+                self.root.geometry(self._pre_mini_geometry)
+        self.root.after(60, self._on_root_configure)
+
     def _on_mousewheel(self, event):
         """滚轮滚动页面；鼠标停在文本框上时交给文本框自己处理。"""
         try:
@@ -1456,12 +1631,14 @@ class AutoTypeApp:
         self._scroll_canvas.yview_scroll(int(-event.delta / 120) or 0, "units")
 
     def _apply_compact(self, compact: bool):
-        """窄窗口时隐藏说明文字、把文本整理选项竖排，保证各控件都不被裁掉。"""
+        """窄窗口时收起说明文字、缩短标签，保证各控件排得下。"""
         if getattr(self, "_compact", None) == compact:
             return
         self._compact = compact
 
         toggles = self._cleanup_toggles
+        short_labels = ("去 Markdown", "去编号", "删空行")
+        full_labels = ("去除 Markdown 符号", "去除重复列表编号", "删除空白行")
         for widget in toggles:
             widget.pack_forget()
             if widget.desc is not None:
@@ -1470,24 +1647,30 @@ class AutoTypeApp:
         self.btn_tidy.pack_forget()
 
         if compact:
-            self._cleanup_label.pack(side="top", anchor="w")
-            for widget in toggles:
-                widget.pack(side="top", anchor="w", pady=(8, 0))
-            self.btn_tidy.pack(side="top", anchor="w", pady=(10, 0))
+            self._cleanup_label.configure(text="整理")
+            self._cleanup_label.pack(side="left", padx=(0, 10))
+            for idx, widget in enumerate(toggles):
+                widget.label.configure(text=short_labels[idx])
+                widget.pack(side="left", padx=((0 if idx == 0 else 10), 0))
+            self.btn_tidy.pack(side="right")
             self.subtitle_label.configure(text="点进目标输入框 → F9 开始 · F8 重来 · Esc 停止")
+            self.shortcut_hint.configure(text="F9 开始 · Esc 停止")
             self.delay_slider.configure(width=px(140))
             self.editor_hint.pack_forget()
             for btn in self._tool_buttons:
                 btn.configure(width=px(58))
         else:
+            self._cleanup_label.configure(text="文本整理")
             self._cleanup_label.pack(side="left", padx=(0, 18))
             for idx, widget in enumerate(toggles):
+                widget.label.configure(text=full_labels[idx])
                 if widget.desc is not None:
                     widget.desc.pack(anchor="w", pady=(px(1), 0))
                 widget.pack(side="left", padx=((0 if idx == 0 else 24), 0))
             self.btn_tidy.pack(side="right")
             self.subtitle_label.configure(
                 text="把光标点进目标输入框 → 按 F9 开始逐字输入   ·   F8 重新开始   ·   Esc 紧急停止")
+            self.shortcut_hint.configure(text="快捷键：F9 开始 / F8 重来 / Esc 停止 / Ctrl+Enter 开始")
             self.delay_slider.configure(width=px(240))
             self.editor_hint.pack(side="left", padx=(8, 0))
             for btn in self._tool_buttons:
