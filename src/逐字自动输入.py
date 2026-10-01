@@ -387,11 +387,13 @@ MONO = "Consolas"
 
 # 界面缩放系数：由 enable_dpi_awareness() 在创建窗口前赋值
 SCALE = 1.0
+# 界面缩放（跟随窗口大小等比缩放，1.0 = 设计尺寸）
+ZOOM = 1.0
 
 
 def px(value: float) -> int:
-    """把设计稿上的像素值换算成当前 DPI 下的真实像素值。"""
-    return max(1, int(round(value * SCALE)))
+    """把设计稿上的像素值换算成当前 DPI + 当前界面缩放下的真实像素值。"""
+    return max(1, int(round(value * SCALE * ZOOM)))
 
 
 def resource_path(name: str) -> str:
@@ -412,8 +414,14 @@ def set_app_icon(root: tk.Tk) -> None:
                 continue
 
 
-def font(size: int = 10, weight: str = "normal", family: str = UI) -> tuple:
-    return (family, size, weight) if weight != "normal" else (family, size)
+def font(size: int = 9, weight: str = "normal", family: str = UI) -> tuple:
+    """字体同样跟随界面缩放。
+
+    用像素字号（负数）而不是磅值：磅值只能取整且 Tk 有最小字号限制，
+    窗口缩小时文字会卡住不缩，导致文字比控件还宽、界面溢出。
+    """
+    pixels = max(6, int(round(size * 1.333 * SCALE * ZOOM)))
+    return (family, -pixels, weight) if weight != "normal" else (family, -pixels)
 
 
 def round_rect(canvas: tk.Canvas, x1, y1, x2, y2, r, **kw):
@@ -531,7 +539,7 @@ class RoundButton(tk.Canvas):
         self._glyph = glyph
         self._command = command
         self._radius = radius if radius is not None else height // 2
-        self._font = font_spec or font(10, "bold")
+        self._font = font_spec or font(9, "bold")
         self._radius = px(self._radius)
         self._pad_x = px(pad_x)
         self._state = "normal"
@@ -638,7 +646,7 @@ class ToggleSwitch(tk.Frame):
     """现代开关（带标题与说明文字）。"""
 
     def __init__(self, master, text, variable, *, desc=None, command=None,
-                 bg=C.CARD, switch_w=42, switch_h=24):
+                 bg=C.CARD, switch_w=38, switch_h=22):
         super().__init__(master, bg=bg)
         self.var = variable
         self._command = command
@@ -653,11 +661,11 @@ class ToggleSwitch(tk.Frame):
 
         box = tk.Frame(self, bg=bg)
         box.pack(side="left", padx=(px(9), 0), anchor="n")
-        self.label = tk.Label(box, text=text, bg=bg, fg=C.TEXT, font=font(10),
+        self.label = tk.Label(box, text=text, bg=bg, fg=C.TEXT, font=font(9),
                               anchor="w", cursor="hand2")
         self.label.pack(anchor="w")
         if desc:
-            self.desc = tk.Label(box, text=desc, bg=bg, fg=C.MUTED, font=font(9),
+            self.desc = tk.Label(box, text=desc, bg=bg, fg=C.MUTED, font=font(8),
                                  anchor="w", justify="left", cursor="hand2")
             self.desc.pack(anchor="w", pady=(px(1), 0))
         else:
@@ -736,7 +744,7 @@ class Segmented(tk.Canvas):
         self._items = list(options)
         self._var = variable
         self._command = command
-        self._font = font_spec or font(10)
+        self._font = font_spec or font(9)
         self._pad_x = px(pad_x)
         self._h = px(height)
         self._hover_idx = -1
@@ -773,7 +781,7 @@ class Segmented(tk.Canvas):
                            fill="#FFFFFF", outline=C.BORDER_STRONG)
             color = C.PRIMARY if selected else (
                 C.TEXT_SOFT if idx == self._hover_idx else C.MUTED)
-            f = tkfont.Font(font=self._font if not selected else font(10, "bold"))
+            f = tkfont.Font(font=self._font if not selected else font(9, "bold"))
             self.create_text(x + seg_w / 2, h / 2 + 1, text=str(opt), fill=color, font=f)
             x += seg_w
 
@@ -883,7 +891,7 @@ class CountRing(tk.Canvas):
             self.create_arc(pad, pad, s - pad, s - pad, start=90, extent=-extent,
                             style="arc", outline=C.PRIMARY, width=px(4))
             self.create_text(s / 2, s / 2 + 1, text=str(self._value),
-                             fill=C.PRIMARY, font=font(12, "bold", MONO))
+                             fill=C.PRIMARY, font=font(11, "bold", MONO))
         else:
             self.create_text(s / 2, s / 2 + 1, text="✓", fill=C.SUCCESS,
                              font=font(13, "bold"))
@@ -968,12 +976,12 @@ class Stepper(tk.Frame):
 
         self.btn_minus = RoundButton(self, "−", lambda: self.step(-1), variant="soft",
                                      width=30, height=30, radius=9,
-                                     font_spec=font(12, "bold"), bg=bg, pad_x=0)
+                                     font_spec=font(11, "bold"), bg=bg, pad_x=0)
         self.btn_minus.pack(side="left")
 
         self.entry = tk.Entry(self, textvariable=self._entry_var, width=4,
                               justify="center", relief="flat", bg=bg, fg=C.TEXT,
-                              font=font(11, "bold", MONO), insertbackground=C.PRIMARY,
+                              font=font(10, "bold", MONO), insertbackground=C.PRIMARY,
                               highlightthickness=0, bd=0)
         self.entry.pack(side="left", padx=2)
         self.entry.bind("<FocusOut>", lambda _e: self.sync())
@@ -981,7 +989,7 @@ class Stepper(tk.Frame):
 
         self.btn_plus = RoundButton(self, "+", lambda: self.step(1), variant="soft",
                                     width=30, height=30, radius=9,
-                                    font_spec=font(12, "bold"), bg=bg, pad_x=0)
+                                    font_spec=font(11, "bold"), bg=bg, pad_x=0)
         self.btn_plus.pack(side="left")
         self.configure(width=px(width))
 
@@ -1017,12 +1025,18 @@ class AutoTypeApp:
         self.ui_queue = queue.Queue()
         self.prev_f8 = False
         self.prev_f9 = False
-        self.log_expanded = False
         self._running = False
         self._started_at = 0.0
         self._save_job = None
+        self._zoom_job = None
+        self._zooming = False
 
         cfg = self._load_settings()
+        self.log_expanded = bool(cfg.get("log_expanded", False))
+        self._mini = bool(cfg.get("mini", False))
+        self._pre_mini_geometry = None
+        self._base_size = (600, 480)
+        self._ui_root = None
         self.countdown_var = tk.IntVar(value=int(cfg.get("countdown", 2)))
         self.delay_var = tk.IntVar(value=int(cfg.get("delay", 10)))
         self.newline_var = tk.StringVar(value=cfg.get("newline", "发送回车"))
@@ -1040,8 +1054,6 @@ class AutoTypeApp:
         self._sync_speed_preset()
         self._update_stats()
         self._apply_topmost()
-        if self.log_expanded:
-            self.root.after(120, self._resize_for_log)
         self._poll_queue()
         self._poll_hotkeys()
 
@@ -1092,81 +1104,82 @@ class AutoTypeApp:
         root = self.root
         root.configure(bg=C.BG)
         root.title(APP_TITLE)
-
-        # 允许自由缩放：下限放到 380×260（逻辑像素），窄窗口会自动切换紧凑布局
-        min_w, min_h = int(380 * self.scale), int(260 * self.scale)
-        root.minsize(min_w, min_h)
+        root.pack_propagate(False)   # 窗口尺寸由我们控制，别被内容"弹回"
+        root.bind("<Configure>", self._on_root_configure)
 
         vx, vy, vw, vh = virtual_screen_bounds()
         if vw <= 0 or vh <= 0:
             vx, vy = 0, 0
             vw, vh = root.winfo_screenwidth(), root.winfo_screenheight()
 
-        geo = cfg.get("geometry")
+        # 先搭一遍界面，给个临时尺寸；真正的尺寸等布局稳定后再算（见 _initial_size）
+        self._build_main()
+        root.geometry(f"{int(600 * self.scale)}x{int(460 * self.scale)}+"
+                      f"{max(vx, vx + (vw - int(600 * self.scale)) // 2)}+"
+                      f"{max(vy, vy + (vh - int(460 * self.scale)) // 2 - px(15))}")
+
+        self._cfg_geometry = cfg.get("geometry")
+        self.root.after(90, self._initial_size)
+
+    def _initial_size(self):
+        """等布局稳定后量出内容尺寸，把窗口设成"刚好放得下"，并设定等比缩放。"""
+        self.root.update_idletasks()
+        base_w = max(1, self._ui_root.winfo_reqwidth())
+        base_h = max(1, self._ui_root.winfo_reqheight())
+        self._base_size = (base_w, base_h)
+
+        vx, vy, vw, vh = virtual_screen_bounds()
+        if vw <= 0 or vh <= 0:
+            vx, vy = 0, 0
+            vw, vh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+
+        geo = self._cfg_geometry
         if isinstance(geo, list) and len(geo) == 4:
-            # 恢复上次的窗口位置/大小，但夹在可见屏幕范围内（防止出现在屏幕外拖动不到）
-            w = min(max(min_w, int(geo[2])), vw)
-            h = min(max(min_h, int(geo[3])), vh)
+            w = min(max(int(base_w * 0.6), int(geo[2])), vw)
+            h = min(max(int(base_h * 0.6), int(geo[3])), vh)
             x = min(max(int(geo[0]), vx), max(vx, vx + vw - w))
             y = min(max(int(geo[1]), vy), max(vy, vy + vh - h))
-            root.geometry(f"{w}x{h}+{x}+{y}")
         else:
-            # 默认就是个"小面板"：1080p 屏幕上约占 32% × 48%
-            w, h = int(620 * self.scale), int(520 * self.scale)
-            w, h = min(w, vw - int(60 * self.scale)), min(h, vh - int(90 * self.scale))
-            root.geometry(f"{w}x{h}+{max(vx, vx + (vw - w) // 2)}+{max(vy, vy + (vh - h) // 2 - 20)}")
+            w, h = base_w, base_h
+            max_h = vh - px(24)
+            if h > max_h:                      # 屏幕放不下就整体等比缩小
+                w = int(w * max_h / h)
+                h = max_h
+            x = max(vx, vx + (vw - w) // 2)
+            y = max(vy, vy + (vh - h) // 2 - px(12))
+        self.root.geometry(f"{w}x{h}+{x}+{y}")
+        self.root.minsize(int(base_w * 0.6), int(base_h * 0.6))
+        self._sync_zoom()
 
-        self._compact = None
-        root.bind("<Configure>", self._on_root_configure)
-        # 关闭尺寸传播：否则重新排布控件时 Tk 会把窗口"弹回"它自己算出的尺寸，
-        # 用户就没法把窗口拖到想要的大小（内容改用滚动来适配）
-        root.pack_propagate(False)
-
-        # 滚动容器：窗口缩得比内容还小时可以滚动，保证所有控件都能用
-        scroll_host = tk.Frame(root, bg=C.BG)
-        scroll_host.pack(fill="both", expand=True)
-        self._scroll_canvas = tk.Canvas(scroll_host, bg=C.BG, highlightthickness=0, bd=0)
-        self._scroll_canvas.pack(side="left", fill="both", expand=True)
-        self._scrollbar = ttk.Scrollbar(scroll_host, orient="vertical",
-                                       command=self._scroll_canvas.yview,
-                                       style="Slim.Vertical.TScrollbar")
-        self._scroll_canvas.configure(yscrollcommand=self._on_scroll_set)
-
-        outer = tk.Frame(self._scroll_canvas, bg=C.BG, padx=px(14), pady=px(12))
-        self._outer_window = self._scroll_canvas.create_window(0, 0, anchor="nw", window=outer)
-        outer.bind("<Configure>", lambda _e: self._scroll_canvas.configure(
-            scrollregion=self._scroll_canvas.bbox("all")))
-        self._scroll_canvas.bind("<Configure>", lambda e: self._scroll_canvas.itemconfigure(
-            self._outer_window, width=e.width))
-        root.bind_all("<MouseWheel>", self._on_mousewheel, add="+")
-
+    def _build_main(self):
+        """构建整个界面（等比缩放时会整体重建）。"""
+        if self._ui_root is not None:
+            self._ui_root.destroy()
+        self._ui_root = tk.Frame(self.root, bg=C.BG, padx=px(10), pady=px(8))
+        self._ui_root.pack(fill="both", expand=True)
+        outer = self._ui_root
         outer.columnconfigure(0, weight=1)
         outer.rowconfigure(1, weight=1, minsize=px(150))
         self._outer = outer
 
         self._build_header(outer)     # row 0
-        self._build_editor(outer)     # row 1（会随窗口伸展）
+        self._build_editor(outer)     # row 1（随窗口伸展）
         self._build_actions(outer)    # row 2
         self._build_progress(outer)   # row 3
-        self._build_settings(outer)   # row 4（小窗口时可滚动查看）
+        self._build_settings(outer)   # row 4
         self._build_log(outer)        # row 5
 
-        self.log_expanded = bool(cfg.get("log_expanded", False))
         if self.log_expanded:
             self.log_body.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
             self.log_header_btn.set_text("▾  运行日志")
-
-        self._mini = bool(cfg.get("mini", False))
-        self._pre_mini_geometry = None
         if self._mini:
-            self.root.after(80, self._apply_mini)
-
+            self._apply_mini()
         self._build_context_menus()
 
     # -- 顶部标题 ------------------------------------------------------- #
     def _build_header(self, parent):
         head = tk.Frame(parent, bg=C.BG)
-        head.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+        head.grid(row=0, column=0, sticky="ew", pady=(0, 7))
         head.columnconfigure(0, weight=1)
 
         left = tk.Frame(head, bg=C.BG)
@@ -1174,36 +1187,36 @@ class AutoTypeApp:
         title_row = tk.Frame(left, bg=C.BG)
         title_row.pack(anchor="w")
         tk.Label(title_row, text=APP_NAME, bg=C.BG, fg=C.TEXT,
-                 font=font(17, "bold")).pack(side="left")
+                 font=font(15, "bold")).pack(side="left")
         self._version_label = tk.Label(title_row, text=f"v{APP_VERSION}", bg=C.BG, fg=C.PRIMARY,
-                                       font=font(9, "bold"))
+                                       font=font(8, "bold"))
         self._version_label.pack(side="left", padx=(8, 0), pady=(6, 0))
         self._author_label = tk.Label(title_row, text=f"by {APP_AUTHOR}", bg=C.BG, fg=C.MUTED,
-                                      font=font(9))
+                                      font=font(8))
         self._author_label.pack(side="left", padx=(6, 0), pady=(6, 0))
         self.subtitle_label = tk.Label(
             left,
-            text="把光标点进目标输入框 → 按 F9 开始逐字输入   ·   F8 重新开始   ·   Esc 紧急停止",
-            bg=C.BG, fg=C.MUTED, font=font(9))
+            text="点进目标输入框，按 F9 开始输入",
+            bg=C.BG, fg=C.MUTED, font=font(8))
         self.subtitle_label.pack(anchor="w", pady=(3, 0))
 
         right = tk.Frame(head, bg=C.BG)
         right.grid(row=0, column=1, sticky="e")
         self.mini_btn = RoundButton(right, "迷你模式", self.toggle_mini, variant="quiet",
-                                    height=34, radius=10, font_spec=font(9), pad_x=12,
+                                    height=34, radius=10, font_spec=font(8), pad_x=12,
                                     width=104, bg=C.BG)
         self.mini_btn.pack(side="left", padx=(0, 8))
         ToggleSwitch(right, "窗口置顶", self.topmost_var, bg=C.BG,
                      command=self._on_topmost_toggle,
-                     switch_w=38, switch_h=22).pack(side="left")
+                     switch_w=36, switch_h=21).pack(side="left")
         self._help_btn = RoundButton(right, "使用说明", self.show_help, variant="quiet", height=34,
-                                     radius=10, font_spec=font(9), glyph="?", width=104, bg=C.BG)
+                                     radius=10, font_spec=font(8), glyph="?", width=104, bg=C.BG)
         self._help_btn.pack(side="left", padx=(10, 0))
 
     # -- 文本编辑区 ----------------------------------------------------- #
     def _build_editor(self, parent):
         card = RoundedBox(parent, radius=18, pad=16, shadow=True,
-                          auto_height=False, height=190)
+                          auto_height=False, height=92)
         card.grid(row=1, column=0, sticky="nsew")
         self._card_editor = card
         body = card.body
@@ -1217,10 +1230,7 @@ class AutoTypeApp:
         title = tk.Frame(bar, bg=C.CARD)
         title.grid(row=0, column=0, sticky="w")
         tk.Label(title, text="要输入的内容", bg=C.CARD, fg=C.TEXT,
-                 font=font(11, "bold")).pack(side="left")
-        self.editor_hint = tk.Label(title, text="支持 Markdown，可直接粘贴", bg=C.CARD,
-                                    fg=C.MUTED, font=font(9))
-        self.editor_hint.pack(side="left", padx=(8, 0))
+                 font=font(10, "bold")).pack(side="left")
 
         tools = tk.Frame(bar, bg=C.CARD)
         tools.grid(row=0, column=1, sticky="e")
@@ -1228,7 +1238,7 @@ class AutoTypeApp:
         for text, cmd in (("导入", self.import_text), ("导出", self.export_text),
                           ("示例", self.insert_sample), ("清空", self.clear_text)):
             btn = RoundButton(tools, text, cmd, variant="quiet", height=30, radius=9,
-                              font_spec=font(9), pad_x=12, bg=C.CARD)
+                              font_spec=font(8), pad_x=12, bg=C.CARD)
             btn.pack(side="left", padx=(6, 0))
             btn._wide_width = btn.winfo_reqwidth()
             self._tool_buttons.append(btn)
@@ -1244,7 +1254,7 @@ class AutoTypeApp:
             wrap, wrap="word", undo=True, relief="flat", bd=0,
             bg=C.CARD, fg=C.TEXT, insertbackground=C.PRIMARY,
             selectbackground="#CFE0FF", selectforeground=C.TEXT,
-            font=font(11), padx=px(14), pady=px(12),
+            font=font(10), padx=px(10), pady=px(8),
             spacing1=px(2), spacing3=px(3),
             highlightthickness=0,
         )
@@ -1263,16 +1273,16 @@ class AutoTypeApp:
         stats.grid(row=2, column=0, sticky="ew", pady=(10, 0))
         stats.columnconfigure(0, weight=1)
         self.stats_left = tk.Label(stats, text="共 0 字 · 0 行 · 预计 0.0 秒",
-                                   bg=C.CARD, fg=C.MUTED, font=font(9))
+                                   bg=C.CARD, fg=C.MUTED, font=font(8))
         self.stats_left.grid(row=0, column=0, sticky="w")
         self.stats_right = tk.Label(stats, text="换行：发送回车", bg=C.CARD,
-                                    fg=C.MUTED, font=font(9))
+                                    fg=C.MUTED, font=font(8))
         self.stats_right.grid(row=0, column=1, sticky="e")
 
     # -- 输入设置 ------------------------------------------------------- #
     def _build_settings(self, parent):
-        card = RoundedBox(parent, radius=18, pad=14)
-        card.grid(row=4, column=0, sticky="ew", pady=(10, 0))
+        card = RoundedBox(parent, radius=16, pad=11)
+        card.grid(row=4, column=0, sticky="ew", pady=(7, 0))
         self._card_settings = card
         body = card.body
         body.columnconfigure(0, weight=1)
@@ -1280,115 +1290,112 @@ class AutoTypeApp:
         row1 = tk.Frame(body, bg=C.CARD)
         row1.grid(row=0, column=0, sticky="ew")
         tk.Label(row1, text="输入速度", bg=C.CARD, fg=C.TEXT,
-                 font=font(10, "bold")).pack(side="left")
+                 font=font(9, "bold")).pack(side="left")
 
         self.speed_seg = Segmented(row1, [name for name, _ in self.SPEED_PRESETS],
                                    self.speed_var, command=self._on_speed_preset,
-                                   height=34, font_spec=font(9), pad_x=13)
-        self.speed_seg.pack(side="left", padx=(12, 16))
+                                   height=30, font_spec=font(8), pad_x=11)
+        self.speed_seg.pack(side="left", padx=(10, 12))
 
         self.delay_slider = SlimSlider(row1, self.delay_var, from_=0, to=200,
-                                       command=self._on_delay_changed, width=240)
+                                       command=self._on_delay_changed, width=170)
         self.delay_slider.pack(side="left")
 
         self.delay_label = tk.Label(row1, text="10 毫秒/字", bg=C.CARD, fg=C.PRIMARY,
-                                    font=font(9, "bold"), width=12, anchor="w")
-        self.delay_label.pack(side="left", padx=(12, 0))
+                                    font=font(8, "bold"), width=10, anchor="w")
+        self.delay_label.pack(side="left", padx=(10, 0))
 
         row2 = tk.Frame(body, bg=C.CARD)
-        row2.grid(row=1, column=0, sticky="ew", pady=(14, 0))
+        row2.grid(row=1, column=0, sticky="ew", pady=(8, 0))
 
         tk.Label(row2, text="开始倒计时", bg=C.CARD, fg=C.TEXT,
-                 font=font(10, "bold")).pack(side="left")
+                 font=font(9, "bold")).pack(side="left")
         self.stepper = Stepper(row2, self.countdown_var, from_=0, to=30)
         self.stepper.pack(side="left", padx=(10, 4))
-        tk.Label(row2, text="秒", bg=C.CARD, fg=C.MUTED, font=font(9)).pack(side="left")
+        tk.Label(row2, text="秒", bg=C.CARD, fg=C.MUTED, font=font(8)).pack(side="left")
 
         tk.Label(row2, text="换行处理", bg=C.CARD, fg=C.TEXT,
-                 font=font(10, "bold")).pack(side="left", padx=(26, 0))
+                 font=font(9, "bold")).pack(side="left", padx=(18, 0))
         self.newline_seg = Segmented(row2, self.NEWLINE_OPTIONS, self.newline_var,
                                      command=lambda _v: self._on_option_changed(),
-                                     height=34, font_spec=font(9), pad_x=13)
-        self.newline_seg.pack(side="left", padx=(12, 0))
+                                     height=30, font_spec=font(8), pad_x=11)
+        self.newline_seg.pack(side="left", padx=(10, 0))
 
         row3 = tk.Frame(body, bg=C.CARD)
-        row3.grid(row=2, column=0, sticky="ew", pady=(14, 0))
+        row3.grid(row=2, column=0, sticky="ew", pady=(8, 0))
         self.jitter_switch = ToggleSwitch(row3, "模拟真人速度抖动", self.jitter_var,
                                           desc="在设定速度上做 ±30% 随机浮动，更像真人打字",
                                           command=self._save_settings)
         self.jitter_switch.pack(side="left")
 
         divider = tk.Frame(body, bg=C.BORDER, height=1)
-        divider.grid(row=3, column=0, sticky="ew", pady=(14, 0))
+        divider.grid(row=3, column=0, sticky="ew", pady=(8, 0))
 
         row4 = tk.Frame(body, bg=C.CARD)
-        row4.grid(row=4, column=0, sticky="ew", pady=(14, 0))
+        row4.grid(row=4, column=0, sticky="ew", pady=(8, 0))
         self._cleanup_row = row4
         self._cleanup_label = tk.Label(row4, text="文本整理", bg=C.CARD, fg=C.TEXT,
-                                       font=font(10, "bold"))
+                                       font=font(9, "bold"))
         self._cleanup_label.pack(side="left", padx=(0, 18))
 
-        self.md_switch = ToggleSwitch(row4, "去除 Markdown 符号", self.clean_md_var,
-                                      desc="** 加粗 **、# 标题等",
+        self.md_switch = ToggleSwitch(row4, "Markdown", self.clean_md_var,
                                       command=self._on_option_changed)
         self.md_switch.pack(side="left")
-        self.list_switch = ToggleSwitch(row4, "去除重复列表编号", self.fix_list_var,
-                                      desc="适配自动编号的在线编辑器",
+        self.list_switch = ToggleSwitch(row4, "去编号", self.fix_list_var,
                                         command=self._on_option_changed)
-        self.list_switch.pack(side="left", padx=(24, 0))
-        self.blank_switch = ToggleSwitch(row4, "删除空白行", self.rm_blank_var,
-                                         desc="段落之间不留空行",
+        self.list_switch.pack(side="left", padx=(14, 0))
+        self.blank_switch = ToggleSwitch(row4, "删空行", self.rm_blank_var,
                                          command=self._on_option_changed)
-        self.blank_switch.pack(side="left", padx=(24, 0))
+        self.blank_switch.pack(side="left", padx=(14, 0))
 
         self.btn_tidy = RoundButton(row4, "立即整理", self.clean_now, variant="soft",
-                                    height=34, radius=10, font_spec=font(9), pad_x=14,
-                                    width=110)
+                                    height=30, radius=9, font_spec=font(8), pad_x=12,
+                                    width=88)
         self.btn_tidy.pack(side="right")
         self._cleanup_toggles = (self.md_switch, self.list_switch, self.blank_switch)
 
     # -- 操作按钮 ------------------------------------------------------- #
     def _build_actions(self, parent):
         bar = tk.Frame(parent, bg=C.BG)
-        bar.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        bar.grid(row=2, column=0, sticky="ew", pady=(7, 0))
 
         self.btn_start = RoundButton(bar, "开始输入", self.start, variant="primary",
-                                     glyph="▶", height=46, radius=14,
-                                     font_spec=font(12, "bold"), pad_x=26, width=196)
+                                     glyph="▶", height=42, radius=13,
+                                     font_spec=font(11, "bold"), pad_x=20, width=150)
         self.btn_start.pack(side="left")
 
         self.btn_restart = RoundButton(bar, "重新开始", self.restart, variant="secondary",
-                                       glyph="↻", height=46, radius=14,
-                                       font_spec=font(11, "bold"), pad_x=20, width=156)
-        self.btn_restart.pack(side="left", padx=(10, 0))
+                                       glyph="↻", height=42, radius=13,
+                                       font_spec=font(10, "bold"), pad_x=16, width=112)
+        self.btn_restart.pack(side="left", padx=(8, 0))
 
         self.btn_stop = RoundButton(bar, "紧急停止", self.stop, variant="danger",
-                                    glyph="■", height=46, radius=14,
-                                    font_spec=font(11, "bold"), pad_x=20, width=156)
-        self.btn_stop.pack(side="left", padx=(10, 0))
+                                    glyph="■", height=42, radius=13,
+                                    font_spec=font(10, "bold"), pad_x=16, width=112)
+        self.btn_stop.pack(side="left", padx=(8, 0))
         self.btn_stop.set_state("disabled")
 
-        self.shortcut_hint = tk.Label(bar, text="快捷键：F9 开始 / F8 重来 / Esc 停止 / Ctrl+Enter 开始",
-                                      bg=C.BG, fg=C.MUTED, font=font(9))
+        self.shortcut_hint = tk.Label(bar, text="F9 开始 · F8 重来 · Esc 停止",
+                                      bg=C.BG, fg=C.MUTED, font=font(8))
         self.shortcut_hint.pack(side="right")
         self._actions_bar = bar
 
     # -- 进度区 --------------------------------------------------------- #
     def _build_progress(self, parent):
-        card = RoundedBox(parent, radius=18, pad=13)
-        card.grid(row=3, column=0, sticky="ew", pady=(10, 0))
+        card = RoundedBox(parent, radius=16, pad=10)
+        card.grid(row=3, column=0, sticky="ew", pady=(7, 0))
         self._card_progress = card
         body = card.body
         body.columnconfigure(1, weight=1)
 
-        self.ring = CountRing(body, size=46)
+        self.ring = CountRing(body, size=36)
         self.ring.grid(row=0, column=0, rowspan=3, sticky="w", padx=(0, 14))
 
         status_row = tk.Frame(body, bg=C.CARD)
         status_row.grid(row=0, column=1, sticky="ew")
         status_row.columnconfigure(0, weight=1)
         tk.Label(status_row, textvariable=self.status_var, bg=C.CARD, fg=C.TEXT,
-                 font=font(11, "bold")).grid(row=0, column=0, sticky="w")
+                 font=font(10, "bold")).grid(row=0, column=0, sticky="w")
         tk.Label(status_row, textvariable=self.percent_var, bg=C.CARD, fg=C.PRIMARY,
                  font=font(15, "bold", MONO)).grid(row=0, column=1, sticky="e")
 
@@ -1396,12 +1403,12 @@ class AutoTypeApp:
         self.progress.grid(row=1, column=1, sticky="ew", pady=(8, 6))
 
         tk.Label(body, textvariable=self.eta_var, bg=C.CARD, fg=C.MUTED,
-                 font=font(9)).grid(row=2, column=1, sticky="w")
+                 font=font(8)).grid(row=2, column=1, sticky="w")
 
     # -- 日志 ----------------------------------------------------------- #
     def _build_log(self, parent):
-        card = RoundedBox(parent, radius=18, pad=12, shadow=False)
-        card.grid(row=5, column=0, sticky="ew", pady=(10, 0))
+        card = RoundedBox(parent, radius=16, pad=10, shadow=False)
+        card.grid(row=5, column=0, sticky="ew", pady=(7, 0))
         self._card_log = card
         body = card.body
         body.columnconfigure(0, weight=1)
@@ -1411,10 +1418,10 @@ class AutoTypeApp:
         bar.columnconfigure(0, weight=1)
         self.log_header_btn = RoundButton(bar, "▸  运行日志", self._toggle_log,
                                           variant="ghost", height=30, radius=9,
-                                          font_spec=font(9), pad_x=12, width=150)
+                                          font_spec=font(8), pad_x=12, width=150)
         self.log_header_btn.grid(row=0, column=0, sticky="w")
         RoundButton(bar, "清空日志", self._clear_console, variant="quiet", height=30,
-                    radius=9, font_spec=font(9), pad_x=12).grid(row=0, column=1, sticky="e")
+                    radius=9, font_spec=font(8), pad_x=12).grid(row=0, column=1, sticky="e")
 
         self.log_body = tk.Frame(body, bg=C.CARD, highlightthickness=0)
         self.log_body.columnconfigure(0, weight=1)
@@ -1429,7 +1436,7 @@ class AutoTypeApp:
 
         self.console = tk.Text(self.log_panel.body, height=5, wrap="word", relief="flat",
                                bd=0, bg=C.CONSOLE_BG, fg=C.CONSOLE_FG,
-                               insertbackground=C.CONSOLE_FG, font=font(9, family=MONO),
+                               insertbackground=C.CONSOLE_FG, font=font(8, family=MONO),
                                padx=12, pady=10, state="disabled", highlightthickness=0)
         self.console.grid(row=0, column=0, sticky="nsew")
         for tag, color in (("info", C.CONSOLE_FG), ("ok", C.CONSOLE_OK),
@@ -1447,7 +1454,7 @@ class AutoTypeApp:
     # -- 右键菜单（复制 / 粘贴 / 剪切 / 全选）------------------------------ #
     def _build_context_menus(self):
         """给文本框和日志加右键菜单，方便复制粘贴。"""
-        self._text_menu = tk.Menu(self.root, tearoff=0, font=font(9))
+        self._text_menu = tk.Menu(self.root, tearoff=0, font=font(8))
         self._text_menu.add_command(label="剪切", accelerator="Ctrl+X", command=self.cut_text)
         self._text_menu.add_command(label="复制", accelerator="Ctrl+C", command=self.copy_text)
         self._text_menu.add_command(label="粘贴", accelerator="Ctrl+V", command=self.paste_text)
@@ -1497,7 +1504,7 @@ class AutoTypeApp:
         self._update_stats()
         self.log(f"已粘贴 {len(data)} 个字符。")
 
-        self._log_menu = tk.Menu(self.root, tearoff=0, font=font(9))
+        self._log_menu = tk.Menu(self.root, tearoff=0, font=font(8))
         self._log_menu.add_command(label="复制", command=self._copy_log_selection)
         self._log_menu.add_command(label="全选并复制", command=self._copy_all_log)
         self._log_menu.add_separator()
@@ -1542,40 +1549,92 @@ class AutoTypeApp:
             self._log_menu.grab_release()
         return "break"
 
-    # -- 自适应布局：窄窗口切换紧凑模式 ---------------------------------- #
+    # -- 等比缩放：窗口多大，里面的字和控件就多大 ------------------------ #
     def _on_root_configure(self, event=None):
         if event is not None and event.widget is not self.root:
             return
-        try:
-            width = self.root.winfo_width()
-        except Exception:
+        if self._zooming:
             return
-        # 窗口尺寸变化后回到内容顶部，避免 Tk 为了显示焦点控件把内容顶偏
-        try:
-            self._scroll_canvas.yview_moveto(0)
-        except Exception:
-            pass
-        self._apply_compact(width < px(880))
+        self._schedule_zoom()
 
-    def _on_scroll_set(self, first, last):
-        """内容高于可视区域时才显示滚动条。"""
-        if float(first) <= 0.0 and float(last) >= 1.0:
-            self._scrollbar.pack_forget()
-        elif not self._scrollbar.winfo_ismapped():
-            self._scrollbar.pack(side="right", fill="y")
-        self._scrollbar.set(first, last)
+    def _schedule_zoom(self):
+        if self._zoom_job:
+            self.root.after_cancel(self._zoom_job)
+        self._zoom_job = self.root.after(150, self._sync_zoom)
+
+    def _sync_zoom(self):
+        """窗口尺寸变了 → 按比例调整整个界面的缩放（内容不会溢出，所以不需要滚动条）。"""
+        self._zoom_job = None
+        w, h = self.root.winfo_width(), self.root.winfo_height()
+        if w < 80 or h < 80:
+            return
+        bw, bh = self._base_size
+        ratio = min(w / max(1, bw), h / max(1, bh))
+        if ratio < 1:
+            ratio *= 0.985        # 稍微留一点余量，保证内容完整显示
+        target = max(0.55, min(2.5, ZOOM * ratio))
+        if abs(target - ZOOM) < 0.04:
+            return
+        self._apply_zoom(target)
+
+    def _apply_zoom(self, target):
+        """按新的缩放比例重建界面：字体、间距、按钮、图标一起等比变化。"""
+        global ZOOM
+        text = self.text_input.get("1.0", "end-1c")
+        try:
+            log_text = self.console.get("1.0", "end-1c")
+        except Exception:
+            log_text = ""
+
+        self._zooming = True
+        try:
+            ZOOM = target
+            self._build_main()
+            self.root.update_idletasks()
+            self._base_size = (self._ui_root.winfo_reqwidth(),
+                               self._ui_root.winfo_reqheight())
+            if text:
+                self.text_input.insert("1.0", text)
+            if log_text.strip():
+                self.console.configure(state="normal")
+                self.console.insert("1.0", log_text)
+                self.console.configure(state="disabled")
+                self.console.see("end")
+        finally:
+            self._zooming = False
+        self._update_stats()
 
     # -- 迷你模式：只留进度和按钮，窗口缩到最小 -------------------------- #
     def toggle_mini(self, preset=None):
         self._mini = (not getattr(self, "_mini", False)) if preset is None else bool(preset)
-        self._apply_mini()
+        if self._mini:
+            self._pre_mini_geometry = self.root.geometry()
+        self._zooming = True
+        try:
+            self._build_main()
+            self.root.update_idletasks()
+            self._base_size = (self._ui_root.winfo_reqwidth(),
+                               self._ui_root.winfo_reqheight())
+            bw, bh = self._base_size
+            if self._mini:
+                vx, vy, vw, vh = virtual_screen_bounds()
+                vw = vw or bw
+                vh = vh or bh
+                w, h = min(bw, vw), min(bh, vh)
+                x = min(max(self.root.winfo_x(), vx), max(0, vx + vw - w))
+                y = min(max(self.root.winfo_y(), vy), max(0, vy + vh - h))
+                self.root.geometry(f"{w}x{h}+{x}+{y}")
+            elif self._pre_mini_geometry:
+                self.root.geometry(self._pre_mini_geometry)
+                self._pre_mini_geometry = None
+        finally:
+            self._zooming = False
+        self._update_stats()
         self._save_settings()
 
     def _apply_mini(self):
         """迷你模式：隐藏文字框、设置和日志，只保留标题、按钮和进度。"""
         if self._mini:
-            if not self._pre_mini_geometry:
-                self._pre_mini_geometry = self.root.geometry()
             for widget in (self._card_editor, self._card_settings, self._card_log):
                 widget.grid_remove()
             self._outer.rowconfigure(1, weight=0, minsize=0)
@@ -1592,11 +1651,6 @@ class AutoTypeApp:
             self.btn_stop.configure(width=px(104))
             self.btn_restart.set_text("重来")
             self.btn_stop.set_text("停止")
-            w, h = int(400 * self.scale), int(260 * self.scale)
-            vx, vy, vw, vh = virtual_screen_bounds()
-            x = min(max(self.root.winfo_x(), vx if vw else 0), max(0, (vw or self.root.winfo_screenwidth()) - w))
-            y = min(max(self.root.winfo_y(), vy if vh else 0), max(0, (vh or self.root.winfo_screenheight()) - h))
-            self.root.geometry(f"{w}x{h}+{x}+{y}")
         else:
             self._card_editor.grid()
             self._card_settings.grid()
@@ -1613,69 +1667,7 @@ class AutoTypeApp:
             self.btn_stop.configure(width=px(156))
             self.btn_restart.set_text("重新开始")
             self.btn_stop.set_text("紧急停止")
-            if self._pre_mini_geometry:
-                self.root.geometry(self._pre_mini_geometry)
-        self.root.after(60, self._on_root_configure)
 
-    def _on_mousewheel(self, event):
-        """滚轮滚动页面；鼠标停在文本框上时交给文本框自己处理。"""
-        try:
-            widget = self.root.winfo_containing(event.x_root, event.y_root)
-        except Exception:
-            widget = None
-        if isinstance(widget, tk.Text):
-            return
-        bbox = self._scroll_canvas.bbox("all")
-        if not bbox or bbox[3] <= self._scroll_canvas.winfo_height():
-            return
-        self._scroll_canvas.yview_scroll(int(-event.delta / 120) or 0, "units")
-
-    def _apply_compact(self, compact: bool):
-        """窄窗口时收起说明文字、缩短标签，保证各控件排得下。"""
-        if getattr(self, "_compact", None) == compact:
-            return
-        self._compact = compact
-
-        toggles = self._cleanup_toggles
-        short_labels = ("去 Markdown", "去编号", "删空行")
-        full_labels = ("去除 Markdown 符号", "去除重复列表编号", "删除空白行")
-        for widget in toggles:
-            widget.pack_forget()
-            if widget.desc is not None:
-                widget.desc.pack_forget()
-        self._cleanup_label.pack_forget()
-        self.btn_tidy.pack_forget()
-
-        if compact:
-            self._cleanup_label.configure(text="整理")
-            self._cleanup_label.pack(side="left", padx=(0, 10))
-            for idx, widget in enumerate(toggles):
-                widget.label.configure(text=short_labels[idx])
-                widget.pack(side="left", padx=((0 if idx == 0 else 10), 0))
-            self.btn_tidy.pack(side="right")
-            self.subtitle_label.configure(text="点进目标输入框 → F9 开始 · F8 重来 · Esc 停止")
-            self.shortcut_hint.configure(text="F9 开始 · Esc 停止")
-            self.delay_slider.configure(width=px(140))
-            self.editor_hint.pack_forget()
-            for btn in self._tool_buttons:
-                btn.configure(width=px(58))
-        else:
-            self._cleanup_label.configure(text="文本整理")
-            self._cleanup_label.pack(side="left", padx=(0, 18))
-            for idx, widget in enumerate(toggles):
-                widget.label.configure(text=full_labels[idx])
-                if widget.desc is not None:
-                    widget.desc.pack(anchor="w", pady=(px(1), 0))
-                widget.pack(side="left", padx=((0 if idx == 0 else 24), 0))
-            self.btn_tidy.pack(side="right")
-            self.subtitle_label.configure(
-                text="把光标点进目标输入框 → 按 F9 开始逐字输入   ·   F8 重新开始   ·   Esc 紧急停止")
-            self.shortcut_hint.configure(text="快捷键：F9 开始 / F8 重来 / Esc 停止 / Ctrl+Enter 开始")
-            self.delay_slider.configure(width=px(240))
-            self.editor_hint.pack(side="left", padx=(8, 0))
-            for btn in self._tool_buttons:
-                btn.configure(width=getattr(btn, "_wide_width", px(70)))
-        self._update_stats()
 
     def _on_ctrl_enter(self, _event=None):
         self.start()
