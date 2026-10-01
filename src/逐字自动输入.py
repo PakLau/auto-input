@@ -39,7 +39,7 @@ from tkinter import filedialog, messagebox, ttk
 # 应用信息
 # --------------------------------------------------------------------------- #
 APP_NAME = "逐字自动输入"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 APP_AUTHOR = "PakLua"
 APP_TITLE = f"{APP_NAME} v{APP_VERSION}"
 
@@ -175,6 +175,15 @@ def send_vk(vk: int) -> None:
 
 def key_down(vk: int) -> bool:
     return bool(user32.GetAsyncKeyState(vk) & 0x8000)
+
+
+def virtual_screen_bounds() -> tuple[int, int, int, int]:
+    """返回所有显示器组成的虚拟屏幕区域 (x, y, width, height)。"""
+    try:
+        gsm = user32.GetSystemMetrics
+        return gsm(76), gsm(77), gsm(78), gsm(79)  # X/Y/CX/CY_VIRTUALSCREEN
+    except Exception:
+        return 0, 0, 0, 0
 
 
 def send_ctrl_key(vk: int) -> None:
@@ -1082,21 +1091,53 @@ class AutoTypeApp:
         root = self.root
         root.configure(bg=C.BG)
         root.title(APP_TITLE)
-        root.minsize(int(860 * self.scale), int(640 * self.scale))
+
+        # 允许自由缩放：下限放到 620×460（逻辑像素），窄窗口会自动切换紧凑布局
+        min_w, min_h = int(620 * self.scale), int(460 * self.scale)
+        root.minsize(min_w, min_h)
+
+        vx, vy, vw, vh = virtual_screen_bounds()
+        if vw <= 0 or vh <= 0:
+            vx, vy = 0, 0
+            vw, vh = root.winfo_screenwidth(), root.winfo_screenheight()
 
         geo = cfg.get("geometry")
         if isinstance(geo, list) and len(geo) == 4:
-            w = max(int(860 * self.scale), int(geo[2]))
-            h = max(int(640 * self.scale), int(geo[3]))
-            root.geometry(f"{w}x{h}+{int(geo[0])}+{int(geo[1])}")
+            # 恢复上次的窗口位置/大小，但夹在可见屏幕范围内（防止出现在屏幕外拖动不到）
+            w = min(max(min_w, int(geo[2])), vw)
+            h = min(max(min_h, int(geo[3])), vh)
+            x = min(max(int(geo[0]), vx), max(vx, vx + vw - w))
+            y = min(max(int(geo[1]), vy), max(vy, vy + vh - h))
+            root.geometry(f"{w}x{h}+{x}+{y}")
         else:
             w, h = int(960 * self.scale), int(800 * self.scale)
-            sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
-            w, h = min(w, sw - int(60 * self.scale)), min(h, sh - int(90 * self.scale))
-            root.geometry(f"{w}x{h}+{max(0, (sw - w) // 2)}+{max(0, (sh - h) // 2 - 20)}")
+            w, h = min(w, vw - int(60 * self.scale)), min(h, vh - int(90 * self.scale))
+            root.geometry(f"{w}x{h}+{max(vx, vx + (vw - w) // 2)}+{max(vy, vy + (vh - h) // 2 - 20)}")
 
-        outer = tk.Frame(root, bg=C.BG, padx=px(18), pady=px(16))
-        outer.pack(fill="both", expand=True)
+        self._compact = None
+        root.bind("<Configure>", self._on_root_configure)
+        # 关闭尺寸传播：否则重新排布控件时 Tk 会把窗口"弹回"它自己算出的尺寸，
+        # 用户就没法把窗口拖到想要的大小（内容改用滚动来适配）
+        root.pack_propagate(False)
+
+        # 滚动容器：窗口缩得比内容还小时可以滚动，保证所有控件都能用
+        scroll_host = tk.Frame(root, bg=C.BG)
+        scroll_host.pack(fill="both", expand=True)
+        self._scroll_canvas = tk.Canvas(scroll_host, bg=C.BG, highlightthickness=0, bd=0)
+        self._scroll_canvas.pack(side="left", fill="both", expand=True)
+        self._scrollbar = ttk.Scrollbar(scroll_host, orient="vertical",
+                                       command=self._scroll_canvas.yview,
+                                       style="Slim.Vertical.TScrollbar")
+        self._scroll_canvas.configure(yscrollcommand=self._on_scroll_set)
+
+        outer = tk.Frame(self._scroll_canvas, bg=C.BG, padx=px(18), pady=px(16))
+        self._outer_window = self._scroll_canvas.create_window(0, 0, anchor="nw", window=outer)
+        outer.bind("<Configure>", lambda _e: self._scroll_canvas.configure(
+            scrollregion=self._scroll_canvas.bbox("all")))
+        self._scroll_canvas.bind("<Configure>", lambda e: self._scroll_canvas.itemconfigure(
+            self._outer_window, width=e.width))
+        root.bind_all("<MouseWheel>", self._on_mousewheel, add="+")
+
         outer.columnconfigure(0, weight=1)
         outer.rowconfigure(1, weight=1, minsize=px(150))
 
@@ -1128,9 +1169,11 @@ class AutoTypeApp:
                  font=font(9, "bold")).pack(side="left", padx=(8, 0), pady=(6, 0))
         tk.Label(title_row, text=f"by {APP_AUTHOR}", bg=C.BG, fg=C.MUTED,
                  font=font(9)).pack(side="left", padx=(6, 0), pady=(6, 0))
-        tk.Label(left,
-                 text="把光标点进目标输入框 → 按 F9 开始逐字输入   ·   F8 重新开始   ·   Esc 紧急停止",
-                 bg=C.BG, fg=C.MUTED, font=font(9)).pack(anchor="w", pady=(3, 0))
+        self.subtitle_label = tk.Label(
+            left,
+            text="把光标点进目标输入框 → 按 F9 开始逐字输入   ·   F8 重新开始   ·   Esc 紧急停止",
+            bg=C.BG, fg=C.MUTED, font=font(9))
+        self.subtitle_label.pack(anchor="w", pady=(3, 0))
 
         right = tk.Frame(head, bg=C.BG)
         right.grid(row=0, column=1, sticky="e")
@@ -1158,15 +1201,20 @@ class AutoTypeApp:
         title.grid(row=0, column=0, sticky="w")
         tk.Label(title, text="要输入的内容", bg=C.CARD, fg=C.TEXT,
                  font=font(11, "bold")).pack(side="left")
-        tk.Label(title, text="支持 Markdown，可直接粘贴", bg=C.CARD, fg=C.MUTED,
-                 font=font(9)).pack(side="left", padx=(8, 0))
+        self.editor_hint = tk.Label(title, text="支持 Markdown，可直接粘贴", bg=C.CARD,
+                                    fg=C.MUTED, font=font(9))
+        self.editor_hint.pack(side="left", padx=(8, 0))
 
         tools = tk.Frame(bar, bg=C.CARD)
         tools.grid(row=0, column=1, sticky="e")
+        self._tool_buttons = []
         for text, cmd in (("导入", self.import_text), ("导出", self.export_text),
                           ("示例", self.insert_sample), ("清空", self.clear_text)):
-            RoundButton(tools, text, cmd, variant="quiet", height=30, radius=9,
-                        font_spec=font(9), pad_x=12, bg=C.CARD).pack(side="left", padx=(6, 0))
+            btn = RoundButton(tools, text, cmd, variant="quiet", height=30, radius=9,
+                              font_spec=font(9), pad_x=12, bg=C.CARD)
+            btn.pack(side="left", padx=(6, 0))
+            btn._wide_width = btn.winfo_reqwidth()
+            self._tool_buttons.append(btn)
 
         wrap = tk.Frame(body, bg=C.CARD, highlightthickness=1,
                         highlightbackground=C.BORDER, highlightcolor=C.PRIMARY)
@@ -1254,8 +1302,10 @@ class AutoTypeApp:
 
         row4 = tk.Frame(body, bg=C.CARD)
         row4.grid(row=4, column=0, sticky="ew", pady=(14, 0))
-        tk.Label(row4, text="文本整理", bg=C.CARD, fg=C.TEXT,
-                 font=font(10, "bold")).pack(side="left", padx=(0, 18))
+        self._cleanup_row = row4
+        self._cleanup_label = tk.Label(row4, text="文本整理", bg=C.CARD, fg=C.TEXT,
+                                       font=font(10, "bold"))
+        self._cleanup_label.pack(side="left", padx=(0, 18))
 
         self.md_switch = ToggleSwitch(row4, "去除 Markdown 符号", self.clean_md_var,
                                       desc="** 加粗 **、# 标题等",
@@ -1274,6 +1324,7 @@ class AutoTypeApp:
                                     height=34, radius=10, font_spec=font(9), pad_x=14,
                                     width=110)
         self.btn_tidy.pack(side="right")
+        self._cleanup_toggles = (self.md_switch, self.list_switch, self.blank_switch)
 
     # -- 操作按钮 ------------------------------------------------------- #
     def _build_actions(self, parent):
@@ -1368,6 +1419,81 @@ class AutoTypeApp:
         self.text_input.edit_modified(False)
         self._update_stats()
 
+    # -- 自适应布局：窄窗口切换紧凑模式 ---------------------------------- #
+    def _on_root_configure(self, event=None):
+        if event is not None and event.widget is not self.root:
+            return
+        try:
+            width = self.root.winfo_width()
+        except Exception:
+            return
+        # 窗口尺寸变化后回到内容顶部，避免 Tk 为了显示焦点控件把内容顶偏
+        try:
+            self._scroll_canvas.yview_moveto(0)
+        except Exception:
+            pass
+        self._apply_compact(width < px(880))
+
+    def _on_scroll_set(self, first, last):
+        """内容高于可视区域时才显示滚动条。"""
+        if float(first) <= 0.0 and float(last) >= 1.0:
+            self._scrollbar.pack_forget()
+        elif not self._scrollbar.winfo_ismapped():
+            self._scrollbar.pack(side="right", fill="y")
+        self._scrollbar.set(first, last)
+
+    def _on_mousewheel(self, event):
+        """滚轮滚动页面；鼠标停在文本框上时交给文本框自己处理。"""
+        try:
+            widget = self.root.winfo_containing(event.x_root, event.y_root)
+        except Exception:
+            widget = None
+        if isinstance(widget, tk.Text):
+            return
+        bbox = self._scroll_canvas.bbox("all")
+        if not bbox or bbox[3] <= self._scroll_canvas.winfo_height():
+            return
+        self._scroll_canvas.yview_scroll(int(-event.delta / 120) or 0, "units")
+
+    def _apply_compact(self, compact: bool):
+        """窄窗口时隐藏说明文字、把文本整理选项竖排，保证各控件都不被裁掉。"""
+        if getattr(self, "_compact", None) == compact:
+            return
+        self._compact = compact
+
+        toggles = self._cleanup_toggles
+        for widget in toggles:
+            widget.pack_forget()
+            if widget.desc is not None:
+                widget.desc.pack_forget()
+        self._cleanup_label.pack_forget()
+        self.btn_tidy.pack_forget()
+
+        if compact:
+            self._cleanup_label.pack(side="top", anchor="w")
+            for widget in toggles:
+                widget.pack(side="top", anchor="w", pady=(8, 0))
+            self.btn_tidy.pack(side="top", anchor="w", pady=(10, 0))
+            self.subtitle_label.configure(text="点进目标输入框 → F9 开始 · F8 重来 · Esc 停止")
+            self.delay_slider.configure(width=px(140))
+            self.editor_hint.pack_forget()
+            for btn in self._tool_buttons:
+                btn.configure(width=px(58))
+        else:
+            self._cleanup_label.pack(side="left", padx=(0, 18))
+            for idx, widget in enumerate(toggles):
+                if widget.desc is not None:
+                    widget.desc.pack(anchor="w", pady=(px(1), 0))
+                widget.pack(side="left", padx=((0 if idx == 0 else 24), 0))
+            self.btn_tidy.pack(side="right")
+            self.subtitle_label.configure(
+                text="把光标点进目标输入框 → 按 F9 开始逐字输入   ·   F8 重新开始   ·   Esc 紧急停止")
+            self.delay_slider.configure(width=px(240))
+            self.editor_hint.pack(side="left", padx=(8, 0))
+            for btn in self._tool_buttons:
+                btn.configure(width=getattr(btn, "_wide_width", px(70)))
+        self._update_stats()
+
     def _on_ctrl_enter(self, _event=None):
         self.start()
         return "break"
@@ -1425,8 +1551,11 @@ class AutoTypeApp:
         seconds = total * max(0, self.delay_var.get()) / 1000.0
         if self.newline_var.get() == "发送回车":
             seconds += max(0, lines - 1) * 0.05
-        self.stats_left.configure(
-            text=f"共 {len(content)} 字 · {lines} 行 · 实际输入 {total} 个字符 · 预计 {seconds:.1f} 秒")
+        if getattr(self, "_compact", False):
+            self.stats_left.configure(text=f"{len(content)} 字 · 预计 {seconds:.1f} 秒")
+        else:
+            self.stats_left.configure(
+                text=f"共 {len(content)} 字 · {lines} 行 · 实际输入 {total} 个字符 · 预计 {seconds:.1f} 秒")
         self.stats_right.configure(text=f"换行：{self.newline_var.get()}")
 
     def import_text(self):
