@@ -9,6 +9,9 @@
 主要特性：
   * 圆角卡片式界面，自定义按钮 / 开关 / 分段控件、实时进度与倒计时环
   * 速度预设 + 精细调节，实时字数 / 预计耗时统计
+  * 代码模式：适配会自动缩进的代码编辑器（如学习通编程题），
+    每行先用 Shift+Home 选中编辑器的自动缩进再替换输入，
+    每一行都精确等于源码，不怕缩进越叠越深
   * 设置自动记忆，文本可导入导出
   * 高 DPI 感知，界面在高分屏上不模糊
 
@@ -39,7 +42,7 @@ from tkinter import filedialog, messagebox, ttk
 # 应用信息
 # --------------------------------------------------------------------------- #
 APP_NAME = "逐字自动输入"
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.2.0"
 APP_AUTHOR = "PakLua"
 APP_TITLE = f"{APP_NAME} v{APP_VERSION}"
 
@@ -83,6 +86,8 @@ KEYEVENTF_UNICODE = 0x0004
 VK_ESCAPE = 0x1B
 VK_RETURN = 0x0D
 VK_BACK = 0x08
+VK_SHIFT = 0x10
+VK_HOME = 0x24
 VK_F8 = 0x77
 VK_F9 = 0x78
 VK_CONTROL = 0x11
@@ -169,6 +174,21 @@ def send_vk(vk: int) -> None:
     user32.SendInput(
         2,
         ctypes.byref(arr(_kb_input(vk, 0, 0), _kb_input(vk, 0, KEYEVENTF_KEYUP))),
+        ctypes.sizeof(INPUT),
+    )
+
+
+def send_shift_vk(vk: int) -> None:
+    """发送 Shift+虚拟键（代码模式用 Shift+Home 选中编辑器的自动缩进）。"""
+    arr = INPUT * 4
+    user32.SendInput(
+        4,
+        ctypes.byref(arr(
+            _kb_input(VK_SHIFT, 0, 0),
+            _kb_input(vk, 0, 0),
+            _kb_input(vk, 0, KEYEVENTF_KEYUP),
+            _kb_input(VK_SHIFT, 0, KEYEVENTF_KEYUP),
+        )),
         ctypes.sizeof(INPUT),
     )
 
@@ -346,6 +366,33 @@ def preprocess_text(content: str, *, markdown: bool, blank_lines: bool, list_fix
     if list_fix:
         content = fix_list_numbering(content)
     return content
+
+
+# --------------------------------------------------------------------------- #
+# 代码模式预处理
+# --------------------------------------------------------------------------- #
+CODE_ENTER_PAUSE = 0.25   # 代码模式下每次回车后的停顿（秒），给编辑器渲染时间
+CODE_HOME_PAUSE = 0.08    # 代码模式下每行 Shift+Home 之后的停顿（秒）
+CODE_ESC_PAUSE = 0.05     # 代码模式下每行收起自动补全弹窗（Esc）后的停顿（秒）
+_CODE_FENCE_RE = re.compile(r"^[ \t]*```")
+
+
+def preprocess_code(text: str) -> str:
+    """代码模式预处理，只做对代码无损的清理：
+    - 去掉从 AI 对话 / Markdown 里复制代码时带进来的 ``` 围栏行；
+    - 行首制表符展开为 4 个空格（缩进统一，列位由打字阶段精确控制）；
+    - 去掉行尾空白。
+    空行与行首空格全部保留——缩进在输入阶段由 Shift+Home 选中替换来保证。
+    """
+    out = []
+    for raw in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        if _CODE_FENCE_RE.match(raw):
+            continue
+        stripped = raw.rstrip()
+        body = stripped.lstrip(" \t")
+        lead = stripped[: len(stripped) - len(body)].replace("\t", "    ")
+        out.append(lead + body)
+    return "\n".join(out).rstrip()   # 末尾的空行/空白行没有意义，丢掉
 
 
 # --------------------------------------------------------------------------- #
@@ -1045,6 +1092,7 @@ class AutoTypeApp:
         self.clean_md_var = tk.BooleanVar(value=bool(cfg.get("clean_md", True)))
         self.fix_list_var = tk.BooleanVar(value=bool(cfg.get("fix_list", True)))
         self.rm_blank_var = tk.BooleanVar(value=bool(cfg.get("rm_blank", True)))
+        self.code_var = tk.BooleanVar(value=bool(cfg.get("code_mode", False)))
         self.speed_var = tk.StringVar(value="")
         self.status_var = tk.StringVar(value="就绪")
         self.percent_var = tk.StringVar(value="0%")
@@ -1085,6 +1133,7 @@ class AutoTypeApp:
             "clean_md": bool(self.clean_md_var.get()),
             "fix_list": bool(self.fix_list_var.get()),
             "rm_blank": bool(self.rm_blank_var.get()),
+            "code_mode": bool(self.code_var.get()),
             "log_expanded": bool(self.log_expanded),
             "mini": bool(getattr(self, "_mini", False)),
             "geometry": [self.root.winfo_x(), self.root.winfo_y(),
@@ -1327,6 +1376,12 @@ class AutoTypeApp:
                                           desc="在设定速度上做 ±30% 随机浮动，更像真人打字",
                                           command=self._save_settings)
         self.jitter_switch.pack(side="left")
+
+        self.code_switch = ToggleSwitch(row3, "代码模式", self.code_var,
+                                        desc="输入代码 / 编程题专用：开始时自动清空目标编辑器；"
+                                             "每行 Esc 收起补全、Shift+Home 选中自动缩进并替换",
+                                        command=self._on_code_mode_changed)
+        self.code_switch.pack(side="left", padx=(24, 0))
 
         divider = tk.Frame(body, bg=C.BORDER, height=1)
         divider.grid(row=3, column=0, sticky="ew", pady=(8, 0))
@@ -1677,6 +1732,17 @@ class AutoTypeApp:
         self._update_stats()
         self._save_settings()
 
+    def _on_code_mode_changed(self, *_):
+        if self.code_var.get():
+            # 代码模式必须逐行回车，且自动缩进的编辑器经不起快打
+            self.newline_var.set("发送回车")
+            if hasattr(self, "newline_seg"):
+                self.newline_seg._redraw()
+            if self.delay_var.get() < 15:
+                self.log("代码模式提示：建议把输入速度调到 25 毫秒/字（「快」档）以上，"
+                         "太快编辑器会丢键。", "warn")
+        self._on_option_changed()
+
     def _on_topmost_toggle(self):
         self._apply_topmost()
         self._save_settings()
@@ -1718,20 +1784,31 @@ class AutoTypeApp:
                                blank_lines=bool(self.rm_blank_var.get()),
                                list_fix=bool(self.fix_list_var.get()))
 
+    def _prepare(self, content: str) -> str:
+        if getattr(self, "code_var", None) and self.code_var.get():
+            return preprocess_code(content)
+        return self._preprocess(content)
+
     def _update_stats(self):
         content = self.text_input.get("1.0", "end-1c")
-        cleaned = self._preprocess(content)
+        cleaned = self._prepare(content)
         total = effective_length(cleaned, self.newline_var.get())
         lines = len(content.split("\n")) if content else 0
         seconds = total * max(0, self.delay_var.get()) / 1000.0
         if self.newline_var.get() == "发送回车":
             seconds += max(0, lines - 1) * 0.05
+        code_mode = bool(getattr(self, "code_var", None) and self.code_var.get())
+        if code_mode:
+            seconds += max(0, lines) * CODE_HOME_PAUSE
+            seconds += max(0, lines) * 2 * CODE_ESC_PAUSE
+            seconds += max(0, lines - 1) * (CODE_ENTER_PAUSE - 0.05)
         if getattr(self, "_compact", False):
             self.stats_left.configure(text=f"{len(content)} 字 · 预计 {seconds:.1f} 秒")
         else:
             self.stats_left.configure(
                 text=f"共 {len(content)} 字 · {lines} 行 · 实际输入 {total} 个字符 · 预计 {seconds:.1f} 秒")
-        self.stats_right.configure(text=f"换行：{self.newline_var.get()}")
+        self.stats_right.configure(text="模式：代码模式" if code_mode
+                                   else f"换行：{self.newline_var.get()}")
 
     def import_text(self):
         path = filedialog.askopenfilename(
@@ -1787,7 +1864,7 @@ class AutoTypeApp:
         if not content.strip():
             self.log("文本框是空的，无需整理。", "warn")
             return
-        cleaned = self._preprocess(content)
+        cleaned = self._prepare(content)
         self.text_input.delete("1.0", "end")
         self.text_input.insert("1.0", cleaned)
         self.log(f"已按当前选项整理文本（{len(content)} → {len(cleaned)} 字符）。", "ok")
@@ -1799,6 +1876,18 @@ class AutoTypeApp:
             "1. 把要填的内容粘贴到文本框（可以带 Markdown 格式）。\n"
             "2. 用鼠标点一下目标网页的输入框，让光标停在里面。\n"
             "3. 回到本窗口点「开始输入」或直接按 F9，倒计时结束后就会逐字输入。\n\n"
+            "代码模式（输入代码 / 编程题时打开）：\n"
+            "· 编辑器回车后往往自动缩进，直接照打缩进会越叠越深；\n"
+            "  代码模式每行先用 Shift+Home 选中自动缩进，随后输入的字符会替换选区，\n"
+            "  每一行都精确等于源码。\n"
+            "· 以字母结尾的行（break、continue 等）会触发编辑器的补全弹窗，\n"
+            "  回车被它拦成「采纳候选」就会丢换行——代码模式在行首行尾各按一次\n"
+            "  Esc 收起弹窗，回车始终落在正文里。\n"
+            "· 输入前把光标点进目标编辑器即可——代码模式开始时会自动\n"
+            "  Ctrl+A + Delete 清空目标编辑器，结束时自动补一个 Esc\n"
+            "  收起补全建议；过程中别把焦点点出编辑器。\n"
+            "· 输入法请切到英文（ENG）。\n"
+            "· 速度建议用「快（25 毫秒/字）」或更慢，回车后会自动多停 0.25 秒。\n\n"
             "F8：中断并从头重新输入\n"
             "Esc：紧急停止\n"
             "Ctrl+Enter：在文本框里直接开始\n\n"
@@ -1839,9 +1928,10 @@ class AutoTypeApp:
         if not params:
             return
         content, countdown, delay_ms = params
-        content = self._preprocess(content)
+        content = self._prepare(content)
         self._launch(content, countdown, delay_ms,
-                     self.newline_var.get(), bool(self.jitter_var.get()))
+                     self.newline_var.get(), bool(self.jitter_var.get()),
+                     bool(self.code_var.get()))
 
     def restart(self, preset_text=None):
         if self.worker and self.worker.is_alive():
@@ -1860,9 +1950,10 @@ class AutoTypeApp:
         if not params:
             return
         content, countdown, delay_ms = params
-        content = self._preprocess(content)
+        content = self._prepare(content)
         self._launch(content, countdown, delay_ms,
-                     self.newline_var.get(), bool(self.jitter_var.get()))
+                     self.newline_var.get(), bool(self.jitter_var.get()),
+                     bool(self.code_var.get()))
 
     def stop(self):
         self.stop_event.set()
@@ -1874,17 +1965,19 @@ class AutoTypeApp:
             return True
         return False
 
-    def _launch(self, content, countdown, delay_ms, newline_mode, jitter):
+    def _launch(self, content, countdown, delay_ms, newline_mode, jitter,
+                code_mode=False):
         self.stop_event.clear()
         self.ui_queue.put(("state", True))
         self.ui_queue.put(("reset",))
         self.worker = threading.Thread(
             target=self._type_worker, daemon=True,
-            args=(content, countdown, delay_ms, newline_mode, jitter))
+            args=(content, countdown, delay_ms, newline_mode, jitter, code_mode))
         self.worker.start()
 
     # -- 输入线程 ------------------------------------------------------- #
-    def _type_worker(self, content, countdown, delay_ms, newline_mode, jitter):
+    def _type_worker(self, content, countdown, delay_ms, newline_mode, jitter,
+                     code_mode=False):
         total = effective_length(content, newline_mode)
         base = delay_ms / 1000.0
         started = time.time()
@@ -1904,6 +1997,16 @@ class AutoTypeApp:
                 self._finish(started, total, done, stopped=True)
                 return
             self.ui_queue.put(("countdown", 0, max(1, countdown)))
+            if code_mode:
+                self.log("代码模式：每行先按 Esc 收起补全弹窗、Shift+Home 选中自动缩进再替换输入。", "info")
+                # 开打前自动清空目标编辑器：上一轮的残留、忘清空、编辑器幽灵
+                # 补全留下的碎片都会被下一轮的整行替换"自愈"，唯独最后一行
+                # 后面没有内容来覆盖，所以源头清空最保险。
+                send_ctrl_key(VK_A)
+                time.sleep(0.1)
+                send_vk(VK_DELETE)
+                time.sleep(0.2)
+                self.log("已自动清空目标编辑器（Ctrl+A + Delete）。请勿中途点出编辑器。", "info")
             self.log("开始输入（F8 重新开始，ESC 停止）……", "ok")
             self.ui_queue.put(("progress", 0, total))
             time.sleep(0.2)
@@ -1923,6 +2026,19 @@ class AutoTypeApp:
                         time.sleep(0.1)
                     line = line[len(EXIT_SENTINEL):]
 
+                if code_mode:
+                    # 学习通这类编辑器打完 break/continue 等以字母结尾的行会弹
+                    # 自动补全候选框，回车会被它拦成"采纳候选"而不是换行，
+                    # 换行就丢了。先按 Esc 收起弹窗，回车才落得到正文里。
+                    send_vk(VK_ESCAPE)
+                    time.sleep(CODE_ESC_PAUSE)
+                    # 编辑器回车后自动缩进，光标停在这段缩进之后；
+                    # Shift+Home 恰好选中它，随后的输入会把选区替换掉，
+                    # 于是每一行的内容都精确等于源码，不受编辑器缩进策略影响。
+                    send_shift_vk(VK_HOME)
+                    time.sleep(CODE_HOME_PAUSE)
+                    line = line.rstrip()
+
                 for ch in line:
                     if self._should_stop():
                         self.log(f"已紧急停止，已完成 {done}/{total}。", "warn")
@@ -1941,13 +2057,22 @@ class AutoTypeApp:
                         send_unicode(" ")
                         done += 1
                     elif newline_mode == "发送回车":
+                        if code_mode:
+                            # 行尾先按 Esc 收起补全弹窗，回车才不会被拦成"采纳候选"
+                            send_vk(VK_ESCAPE)
+                            time.sleep(CODE_ESC_PAUSE)
                         send_vk(VK_RETURN)
                         done += 1
-                        time.sleep(0.05)
+                        time.sleep(CODE_ENTER_PAUSE if code_mode else 0.05)
                 self.ui_queue.put(("progress", done, total))
                 if done and done % 20 == 0:
                     self.log(f"  已输入 {done}/{total}")
 
+            if code_mode:
+                # 收尾再按一次 Esc，收起打最后一个字时可能挂着的幽灵补全，
+                # 免得之后任何一次回车把它采纳进来（末行没有下一行来自愈）
+                send_vk(VK_ESCAPE)
+                time.sleep(0.05)
             self.log("全部输入完成。", "ok")
             self._finish(started, total, done, stopped=False)
         except Exception as exc:  # noqa: BLE001
